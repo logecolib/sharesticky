@@ -1,0 +1,108 @@
+import { create } from "zustand";
+import {
+  type Sticky,
+  getAllStickies,
+  createSticky as bridgeCreateSticky,
+  updateSticky as bridgeUpdateSticky,
+  deleteSticky as bridgeDeleteSticky,
+  openStickyWindow,
+  getCurrentDesktopId,
+  setStickyDesktops,
+} from "../lib/tauri-bridge";
+
+interface StickiesState {
+  stickies: Map<string, Sticky>;
+  loaded: boolean;
+  loadStickies: () => Promise<void>;
+  createSticky: (color?: string) => Promise<Sticky>;
+  updateStickyContent: (id: string, content: string) => Promise<void>;
+  updateStickyMeta: (id: string, partial: Partial<Sticky>) => Promise<void>;
+  deleteSticky: (id: string) => Promise<void>;
+  getSticky: (id: string) => Sticky | undefined;
+}
+
+export const useStickiesStore = create<StickiesState>((set, get) => ({
+  stickies: new Map(),
+  loaded: false,
+
+  loadStickies: async () => {
+    try {
+      const list = await getAllStickies();
+      const map = new Map<string, Sticky>();
+      for (const s of list) {
+        map.set(s.id, s);
+        // Restore multi-desktop state in the monitor thread
+        if (s.desktop_id && s.desktop_id !== "") {
+          const ids = s.desktop_id.split(",");
+          if (ids.length > 1 || ids[0] === "*") {
+            setStickyDesktops(s.id, ids).catch(() => {});
+          }
+        }
+      }
+      set({ stickies: map, loaded: true });
+    } catch (err) {
+      console.error("Failed to load stickies:", err);
+      set({ loaded: true });
+    }
+  },
+
+  createSticky: async (color = "#fff9c4") => {
+    const sticky = await bridgeCreateSticky(color);
+
+    // Phase 2: Tag the sticky with the current virtual desktop
+    try {
+      const desktopId = await getCurrentDesktopId();
+      if (desktopId) {
+        sticky.desktop_id = desktopId;
+        await bridgeUpdateSticky(sticky.id, { desktop_id: desktopId });
+      }
+    } catch {
+      // Non-fatal: desktop detection may be unavailable
+    }
+
+    set((state) => {
+      const next = new Map(state.stickies);
+      next.set(sticky.id, sticky);
+      return { stickies: next };
+    });
+    await openStickyWindow(sticky);
+    return sticky;
+  },
+
+  updateStickyContent: async (id: string, content: string) => {
+    set((state) => {
+      const next = new Map(state.stickies);
+      const existing = next.get(id);
+      if (existing) {
+        next.set(id, { ...existing, content, updated_at: Date.now() });
+      }
+      return { stickies: next };
+    });
+    await bridgeUpdateSticky(id, { content });
+  },
+
+  updateStickyMeta: async (id: string, partial: Partial<Sticky>) => {
+    set((state) => {
+      const next = new Map(state.stickies);
+      const existing = next.get(id);
+      if (existing) {
+        next.set(id, { ...existing, ...partial, updated_at: Date.now() });
+      }
+      return { stickies: next };
+    });
+    await bridgeUpdateSticky(id, partial);
+  },
+
+  deleteSticky: async (id: string) => {
+    set((state) => {
+      const next = new Map(state.stickies);
+      next.delete(id);
+      return { stickies: next };
+    });
+    await bridgeDeleteSticky(id);
+  },
+
+  getSticky: (id: string) => {
+    return get().stickies.get(id);
+  },
+}));

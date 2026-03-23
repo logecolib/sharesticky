@@ -1,0 +1,205 @@
+/* Sticky note window */
+.sticky-window {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), 0 1px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-family);
+  position: relative;
+}
+
+/* Drag handle */
+.sticky-drag-handle {
+  height: 24px;
+  min-height: 24px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sticky-drag-handle:active {
+  cursor: grabbing;
+}
+
+.sticky-drag-handle .grip-dots {
+  display: flex;
+  gap: 3px;
+  opacity: 0.3;
+}
+
+.sticky-drag-handle .grip-dots .dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+
+.sticky-drag-handle .close-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: currentColor;
+  opacity: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  padding: 0;
+  transition: opacity 0.15s ease;
+}
+
+.sticky-window:hover .sticky-drag-handle .close-btn {
+  opacity: 0.5;
+}
+
+.sticky-drag-handle .close-btn:hover {
+  opacity: 1 !important;
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Editor */
+.sticky-editor {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+
+.sticky-editor .tiptap {
+  outline: none;
+  min-height: 100%;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.sticky-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: currentColor;
+  opacity: 0.35;
+  pointer-events: none;
+  height: 0;
+}
+
+.sticky-editor .tiptap ul[data-type='taskList'] {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sticky-editor .tiptap ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.sticky-editor .tiptap ul[data-type='taskList'] li label {
+  margin-top: 2px;
+}
+
+.sticky-editor .tiptap ul[data-type='taskList'] li div {
+  flex: 1;
+}
+
+/* Toolbar */
+.sticky-toolbar {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border-radius: 8px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.sticky-window:hover .sticky-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sticky-toolbar .toolbar-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 14px;
+  padding: 0;
+  transition: background-color 0.15s ease;
+}
+
+.sticky-toolbar .toolbar-btn:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+.sticky-toolbar .toolbar-btn.active {
+  background-color: rgba(0, 0, 0, 0.12);
+}
+
+.sticky-toolbar .toolbar-btn.delete:hover {
+  background-color: rgba(220, 53, 69, 0.12);
+  color: #dc3545;
+}
+
+.sticky-toolbar .color-picker {
+  display: flex;
+  gap: 3px;
+  padding: 0 4px;
+  border-right: 1px solid rgba(0, 0, 0, 0.1);
+  margin-right: 2px;
+}
+
+.sticky-toolbar .color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+  padding: 0;
+}
+
+.sticky-toolbar .color-swatch:hover {
+  transform: scale(1.2);
+}
+
+.sticky-toolbar .color-swatch.selected {
+  border-color: rgba(0, 0, 0, 0.4);
+}
+
+.sticky-toolbar .toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background-color: rgba(0, 0, 0, 0.1);
+  margin: 0 2px;
+}

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { emit } from "@tauri-apps/api/event";
 import {
   type Sticky,
   getAllStickies,
@@ -100,6 +101,8 @@ export const useStickiesStore = create<StickiesState>((set, get) => ({
       return { stickies: next };
     });
     await bridgeDeleteSticky(id);
+    // Notify other windows (manager) to refresh
+    await emit("stickies-changed");
   },
 
   getSticky: (id: string) => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStickiesStore } from "../store/stickies";
+import { listen } from "@tauri-apps/api/event";
 import { openStickyWindow, getCurrentDesktopId, onDesktopChanged } from "../lib/tauri-bridge";
 import type { Sticky } from "../lib/tauri-bridge";
 import "../styles/manager.css";
@@ -56,6 +57,14 @@ function ManagerWindow() {
       loadStickies();
     }
   }, [loaded, loadStickies]);
+
+  // Reload when stickies change in other windows (e.g. delete from sticky window)
+  useEffect(() => {
+    const unlisten = listen("stickies-changed", () => {
+      loadStickies();
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [loadStickies]);
 
   // Phase 2: Track current virtual desktop
   useEffect(() => {

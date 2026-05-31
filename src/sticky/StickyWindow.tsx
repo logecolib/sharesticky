@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import StickyDragHandle from "./StickyDragHandle";
 import StickyEditor from "./StickyEditor";
 import StickyToolbar from "./StickyToolbar";
@@ -80,10 +81,26 @@ function StickyWindow({ label }: StickyWindowProps) {
             newSet.add(desktop_id);
           }
           const newIds = Array.from(newSet);
-          await updateStickyMeta(stickyId, { desktop_id: newIds.join(",") || "" });
-          await moveStickyToDesktop(stickyId, desktop_id).catch((err) =>
-            console.error("moveStickyToDesktop:", err)
-          );
+
+          if (newIds.length === 0) {
+            // Last desktop unselected → delete the sticky entirely
+            const deleteSticky = useStickiesStore.getState().deleteSticky;
+            await setStickyDesktops(stickyId, []).catch(() => {});
+            await deleteSticky(stickyId);
+            await getCurrentWindow().close();
+            return;
+          }
+
+          await updateStickyMeta(stickyId, { desktop_id: newIds.join(",") });
+
+          // If we just removed the current desktop, move window to a remaining one
+          const currentDesktop = await getCurrentDesktopId().catch(() => "");
+          if (currentDesktop && !newSet.has(currentDesktop)) {
+            await moveStickyToDesktop(stickyId, newIds[0]).catch((err) =>
+              console.error("moveStickyToDesktop:", err)
+            );
+          }
+
           await setStickyDesktops(stickyId, newIds.length > 1 ? newIds : []).catch(() => {});
         }
       }

@@ -18,6 +18,9 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::Shell::IVirtualDesktopManager;
 use windows::core::{w, PCWSTR};
 
+use super::desktop_id::{format_desktop_id, parse_desktop_id, DesktopId};
+use super::virtual_desktops::{DesktopError, VirtualDesktops, WindowHandle};
+
 /// Info about a virtual desktop, returned to the frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct DesktopInfo {
@@ -191,17 +194,8 @@ fn get_all_desktop_guids() -> Result<Vec<String>, String> {
 
         result.ok().map_err(|e| format!("Failed to read VirtualDesktopIDs: {e}"))?;
 
-        // Each GUID is 16 bytes
-        let guids: Vec<String> = buf
-            .chunks_exact(16)
-            .map(|chunk| {
-                let mut bytes = [0u8; 16];
-                bytes.copy_from_slice(chunk);
-                guid_to_string(&bytes_to_guid(&bytes))
-            })
-            .collect();
-
-        Ok(guids)
+        // Splitting the blob into ids is pure logic, and unit tested.
+        Ok(super::desktop_id::parse_desktop_id_list(&buf))
     }
 }
 
@@ -272,7 +266,10 @@ fn get_desktop_name(guid_str: &str) -> Result<String, String> {
 // GUID helpers
 // ---------------------------------------------------------------------------
 
-/// Convert 16 raw bytes (little-endian) into a GUID struct.
+// The encoding itself lives in `platform::desktop_id`, which is pure and unit
+// tested. These are conversions between that representation and the COM type.
+
+/// Convert 16 raw bytes (mixed-endian GUID layout) into a COM GUID struct.
 fn bytes_to_guid(bytes: &[u8; 16]) -> GUID {
     GUID {
         data1: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
@@ -285,53 +282,44 @@ fn bytes_to_guid(bytes: &[u8; 16]) -> GUID {
     }
 }
 
+/// Flatten a COM GUID struct back into its 16 raw bytes.
+fn guid_to_bytes(guid: &GUID) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0..4].copy_from_slice(&guid.data1.to_le_bytes());
+    bytes[4..6].copy_from_slice(&guid.data2.to_le_bytes());
+    bytes[6..8].copy_from_slice(&guid.data3.to_le_bytes());
+    bytes[8..16].copy_from_slice(&guid.data4);
+    bytes
+}
+
 /// Format a GUID as a standard string: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
 pub fn guid_to_string(guid: &GUID) -> String {
-    format!(
-        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-        guid.data1,
-        guid.data2,
-        guid.data3,
-        guid.data4[0],
-        guid.data4[1],
-        guid.data4[2],
-        guid.data4[3],
-        guid.data4[4],
-        guid.data4[5],
-        guid.data4[6],
-        guid.data4[7]
-    )
+    format_desktop_id(&guid_to_bytes(guid))
 }
 
 /// Parse a GUID string back into a GUID struct.
 pub fn string_to_guid(s: &str) -> Result<GUID, String> {
-    let s = s.trim_matches(|c| c == '{' || c == '}');
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 5 {
-        return Err(format!("Invalid GUID format: {s}"));
+    parse_desktop_id(s)
+        .map(|bytes| bytes_to_guid(&bytes))
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Adapter: the only place COM is reached, and it makes no decisions
+// ---------------------------------------------------------------------------
+
+impl VirtualDesktops for VirtualDesktopService {
+    fn current_desktop(&self) -> Result<DesktopId, DesktopError> {
+        get_current_desktop_from_registry().map_err(DesktopError::Unavailable)
     }
 
-    let data1 = u32::from_str_radix(parts[0], 16).map_err(|e| format!("GUID parse error: {e}"))?;
-    let data2 = u16::from_str_radix(parts[1], 16).map_err(|e| format!("GUID parse error: {e}"))?;
-    let data3 = u16::from_str_radix(parts[2], 16).map_err(|e| format!("GUID parse error: {e}"))?;
-
-    let hex34 = format!("{}{}", parts[3], parts[4]);
-    if hex34.len() != 16 {
-        return Err(format!("Invalid GUID data4 section: {hex34}"));
+    fn is_window_on_current(&self, window: WindowHandle) -> Result<bool, DesktopError> {
+        self.is_on_current_desktop(window.0).map_err(DesktopError::Failed)
     }
 
-    let mut data4 = [0u8; 8];
-    for i in 0..8 {
-        data4[i] = u8::from_str_radix(&hex34[i * 2..i * 2 + 2], 16)
-            .map_err(|e| format!("GUID parse error: {e}"))?;
+    fn move_window_to(&self, window: WindowHandle, desktop: &str) -> Result<(), DesktopError> {
+        self.move_to_desktop(window.0, desktop).map_err(DesktopError::Failed)
     }
-
-    Ok(GUID {
-        data1,
-        data2,
-        data3,
-        data4,
-    })
 }
 
 // ---------------------------------------------------------------------------

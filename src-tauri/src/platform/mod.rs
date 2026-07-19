@@ -7,6 +7,7 @@
 
 // Pure desktop-id encoding. Platform-independent on purpose so it can be
 // unit tested anywhere; the windows-crate types stay in the adapter below.
+pub mod availability;
 pub mod desktop_id;
 pub mod placement;
 pub mod virtual_desktops;

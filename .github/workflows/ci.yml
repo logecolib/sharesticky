@@ -33,3 +33,24 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: ignore
+
+  rust:
+    name: Rust (unit tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Library unit tests only. These cover the pure layer - desktop id
+      # encoding, placement policy, and the port driven against its fake - none
+      # of which need a webview or an interactive desktop session.
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Warnings are errors
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings

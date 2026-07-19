@@ -150,7 +150,13 @@ fn setup_desktop_monitor(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
 /// to follow the user. Emits `desktop-changed` events.
 #[cfg(target_os = "windows")]
 fn desktop_monitor_loop(app: tauri::AppHandle) {
-    use platform::windows::{get_current_desktop_from_registry, DesktopMonitorState, VirtualDesktopService};
+    use platform::placement::ALL_DESKTOPS;
+    use platform::virtual_desktops::{reconcile, VirtualDesktops, WindowHandle};
+    use platform::windows::{DesktopMonitorState, VirtualDesktopService};
+
+    // The manager window is treated as a sticky pinned to every desktop.
+    let follows_everywhere: std::collections::HashSet<String> =
+        std::iter::once(ALL_DESKTOPS.to_string()).collect();
 
     // Each thread needs its own COM init + VDS instance for MoveWindowToDesktop
     let vds = match VirtualDesktopService::new_with_com_init() {
@@ -166,8 +172,9 @@ fn desktop_monitor_loop(app: tauri::AppHandle) {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // Get current desktop from registry (fast, no temp window needed)
-        let current_id = match get_current_desktop_from_registry() {
+        // Asked through the port rather than the registry directly, so the loop
+        // depends on the trait and not on how Windows happens to store this.
+        let current_id = match vds.current_desktop() {
             Ok(id) => id,
             Err(_) => continue,
         };
@@ -179,13 +186,17 @@ fn desktop_monitor_loop(app: tauri::AppHandle) {
             }
             last_desktop_id = current_id.clone();
 
-            // Keep manager window on every desktop
+            // The manager is simply pinned to all desktops, so it follows the
+            // user. The decision itself lives in platform::placement and is
+            // unit tested against a fake; this only supplies the window.
             if let Some(manager) = app.get_webview_window("manager") {
                 if let Ok(h) = manager.hwnd() {
-                    let hwnd = h.0 as isize;
-                    if !vds.is_on_current_desktop(hwnd).unwrap_or(true) {
-                        let _ = vds.move_to_desktop(hwnd, &current_id);
-                    }
+                    let _ = reconcile(
+                        &vds,
+                        WindowHandle(h.0 as isize),
+                        &follows_everywhere,
+                        &current_id,
+                    );
                 }
             }
         }

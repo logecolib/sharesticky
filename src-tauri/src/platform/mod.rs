@@ -5,6 +5,12 @@
 // - macOS: CGSSpace / NSWorkspace APIs
 // - Linux: X11 _NET_CURRENT_DESKTOP / Wayland ext-workspace
 
+// Pure desktop-id encoding. Platform-independent on purpose so it can be
+// unit tested anywhere; the windows-crate types stay in the adapter below.
+pub mod desktop_id;
+pub mod placement;
+pub mod virtual_desktops;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 

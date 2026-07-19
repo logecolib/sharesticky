@@ -3,6 +3,7 @@ import { useStickiesStore } from "../store/stickies";
 import { listen } from "@tauri-apps/api/event";
 import { openStickyWindow, getCurrentDesktopId, onDesktopChanged } from "../lib/tauri-bridge";
 import type { Sticky } from "../lib/tauri-bridge";
+import { isOnDesktop, isStickyOnCurrentDesktop } from "../lib/desktop-visibility";
 import "../styles/manager.css";
 
 function extractPreviewText(content: string): string {
@@ -84,9 +85,7 @@ function ManagerWindow() {
   const stickiesList = Array.from(stickies.values())
     .filter((s) => {
       if (!thisDesktopOnly || !currentDesktopId) return true;
-      if (s.desktop_id === "*") return true;
-      if (!s.desktop_id) return false;
-      return s.desktop_id.split(",").includes(currentDesktopId);
+      return isOnDesktop(s.desktop_id, currentDesktopId);
     })
     .sort((a, b) => b.updated_at - a.updated_at);
 
@@ -125,7 +124,7 @@ function ManagerWindow() {
               <StickyCard
                 key={sticky.id}
                 sticky={sticky}
-                isOnCurrentDesktop={!currentDesktopId || !sticky.desktop_id || sticky.desktop_id === currentDesktopId || sticky.pinned === 1}
+                isOnCurrentDesktop={isStickyOnCurrentDesktop(sticky, currentDesktopId)}
               />
             ))}
           </div>

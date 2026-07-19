@@ -6,6 +6,7 @@ import StickyDragHandle from "./StickyDragHandle";
 import StickyEditor from "./StickyEditor";
 import StickyToolbar from "./StickyToolbar";
 import { useStickiesStore } from "../store/stickies";
+import { parseDesktopIds } from "../lib/desktop-visibility";
 import {
   moveStickyToDesktop,
   setStickyDesktops,
@@ -16,11 +17,6 @@ import "../styles/sticky.css";
 
 interface StickyWindowProps {
   label: string;
-}
-
-function parseDesktopIds(desktopId: string): Set<string> {
-  if (!desktopId || desktopId === "") return new Set();
-  return new Set(desktopId.split(","));
 }
 
 function StickyWindow({ label }: StickyWindowProps) {

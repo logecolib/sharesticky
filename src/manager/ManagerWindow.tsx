@@ -51,6 +51,7 @@ function ManagerWindow() {
   const loadStickies = useStickiesStore((s) => s.loadStickies);
   const createSticky = useStickiesStore((s) => s.createSticky);
   const [currentDesktopId, setCurrentDesktopId] = useState("");
+  const [thisDesktopOnly, setThisDesktopOnly] = useState(true);
 
   useEffect(() => {
     if (!loaded) {
@@ -80,9 +81,14 @@ function ManagerWindow() {
     return () => { unlisten?.(); };
   }, []);
 
-  const stickiesList = Array.from(stickies.values()).sort(
-    (a, b) => b.updated_at - a.updated_at,
-  );
+  const stickiesList = Array.from(stickies.values())
+    .filter((s) => {
+      if (!thisDesktopOnly || !currentDesktopId) return true;
+      if (s.desktop_id === "*") return true;
+      if (!s.desktop_id) return false;
+      return s.desktop_id.split(",").includes(currentDesktopId);
+    })
+    .sort((a, b) => b.updated_at - a.updated_at);
 
   const handleNewSticky = async () => {
     const color = COLORS[Math.floor(Math.random() * COLORS.length)];
@@ -93,9 +99,19 @@ function ManagerWindow() {
     <div className="manager-window">
       <div className="manager-header">
         <h1>ShareSticky</h1>
-        <button className="new-sticky-btn" onClick={handleNewSticky}>
-          + New Sticky
-        </button>
+        <div className="manager-header-actions">
+          <label className="desktop-filter-checkbox">
+            <input
+              type="checkbox"
+              checked={thisDesktopOnly}
+              onChange={(e) => setThisDesktopOnly(e.target.checked)}
+            />
+            <span className="filter-label">This desktop</span>
+          </label>
+          <button className="new-sticky-btn" onClick={handleNewSticky}>
+            + New Sticky
+          </button>
+        </div>
       </div>
 
       <div className="manager-content">

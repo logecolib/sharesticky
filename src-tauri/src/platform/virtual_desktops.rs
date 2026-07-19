@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 
+use super::availability::{resolve_current_desktop, Resolved};
 use super::desktop_id::DesktopId;
 use super::placement::{placement_for, Placement};
 
@@ -49,8 +50,32 @@ pub trait VirtualDesktops: Send + Sync {
     /// Whether a window is on the desktop the user is currently looking at.
     fn is_window_on_current(&self, window: WindowHandle) -> Result<bool, DesktopError>;
 
+    /// Which desktop a window sits on.
+    ///
+    /// Note this only answers for a window that has been shown; an unshown
+    /// window is not registered with the virtual-desktop system and the OS
+    /// reports `0x8002802B` for it.
+    fn desktop_of_window(&self, window: WindowHandle) -> Result<DesktopId, DesktopError>;
+
     /// Move a window onto a specific desktop.
     fn move_window_to(&self, window: WindowHandle, desktop: &str) -> Result<(), DesktopError>;
+}
+
+/// Work out the current desktop, falling back to COM when the registry cannot
+/// answer.
+///
+/// `reference` is a window we own that has already been shown; it is what the
+/// COM fallback queries. Without one, only the registry can answer.
+pub fn current_desktop_with_fallback<V: VirtualDesktops + ?Sized>(
+    desktops: &V,
+    reference: Option<WindowHandle>,
+) -> Result<Resolved, DesktopError> {
+    resolve_current_desktop(desktops.current_desktop(), || match reference {
+        Some(window) => desktops.desktop_of_window(window),
+        None => Err(DesktopError::Unavailable(
+            "no reference window to query".into(),
+        )),
+    })
 }
 
 /// Bring one window in line with where it is supposed to be.
@@ -89,6 +114,9 @@ pub mod fake {
         pub moves: Mutex<Vec<(WindowHandle, DesktopId)>>,
         /// When set, every call fails this way.
         unavailable: Mutex<Option<String>>,
+        /// When set, `current_desktop` fails but window queries still work -
+        /// the environment measured on a GitHub-hosted runner.
+        no_registry: Mutex<bool>,
     }
 
     impl FakeVirtualDesktops {
@@ -98,7 +126,15 @@ pub mod fake {
                 windows: Mutex::new(HashMap::new()),
                 moves: Mutex::new(Vec::new()),
                 unavailable: Mutex::new(None),
+                no_registry: Mutex::new(false),
             }
+        }
+
+        /// Simulate an environment whose virtual-desktop registry keys are
+        /// absent while COM still answers - measured on `windows-latest`.
+        pub fn without_registry(self) -> Self {
+            *self.no_registry.lock().unwrap() = true;
+            self
         }
 
         /// Place a window on a desktop without recording it as a move.
@@ -137,7 +173,20 @@ pub mod fake {
     impl VirtualDesktops for FakeVirtualDesktops {
         fn current_desktop(&self) -> Result<DesktopId, DesktopError> {
             self.guard()?;
+            if *self.no_registry.lock().unwrap() {
+                return Err(DesktopError::Unavailable(
+                    "The system cannot find the file specified. (0x80070002)".into(),
+                ));
+            }
             Ok(self.current.lock().unwrap().clone())
+        }
+
+        fn desktop_of_window(&self, window: WindowHandle) -> Result<DesktopId, DesktopError> {
+            self.guard()?;
+            self.windows.lock().unwrap().get(&window).cloned().ok_or_else(|| {
+                // What Windows reports for a window it has not registered.
+                DesktopError::Failed("Element not found. (0x8002802B)".into())
+            })
         }
 
         fn is_window_on_current(&self, window: WindowHandle) -> Result<bool, DesktopError> {
@@ -233,6 +282,56 @@ mod tests {
 
         // Only the first tick had anything to do.
         assert_eq!(desktops.move_count(), 1);
+    }
+
+    mod current_desktop_with_fallback {
+        use super::*;
+        use crate::platform::availability::DesktopSource;
+
+        #[test]
+        fn uses_the_registry_when_it_answers() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A).with_window_on(MANAGER, DESKTOP_A);
+
+            let (id, source) = current_desktop_with_fallback(&desktops, Some(MANAGER)).unwrap();
+
+            assert_eq!(id, DESKTOP_A);
+            assert_eq!(source, DesktopSource::Registry);
+        }
+
+        // The environment measured on a GitHub-hosted runner: the VD registry
+        // keys do not exist, but IVirtualDesktopManager answers normally.
+        #[test]
+        fn falls_back_to_com_where_the_registry_keys_do_not_exist() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A)
+                .with_window_on(MANAGER, DESKTOP_A)
+                .without_registry();
+
+            let (id, source) = current_desktop_with_fallback(&desktops, Some(MANAGER)).unwrap();
+
+            assert_eq!(id, DESKTOP_A);
+            assert_eq!(source, DesktopSource::Com);
+        }
+
+        #[test]
+        fn reports_unavailable_without_a_reference_window_to_fall_back_on() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A).without_registry();
+
+            let err = current_desktop_with_fallback(&desktops, None).unwrap_err();
+
+            assert!(matches!(err, DesktopError::Unavailable(_)));
+        }
+
+        #[test]
+        fn reports_unavailable_when_the_reference_window_is_not_registered() {
+            // Registry gone and the window has never been shown, so COM cannot
+            // answer for it either.
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A).without_registry();
+
+            let err = current_desktop_with_fallback(&desktops, Some(MANAGER)).unwrap_err();
+
+            assert!(matches!(err, DesktopError::Unavailable(_)));
+            assert!(err.to_string().contains("0x8002802B"));
+        }
     }
 
     // On a CI runner or service session there is no shell hosting the

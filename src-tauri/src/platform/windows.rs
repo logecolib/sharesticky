@@ -317,6 +317,10 @@ impl VirtualDesktops for VirtualDesktopService {
         self.is_on_current_desktop(window.0).map_err(DesktopError::Failed)
     }
 
+    fn desktop_of_window(&self, window: WindowHandle) -> Result<DesktopId, DesktopError> {
+        self.get_desktop_id(window.0).map_err(DesktopError::Failed)
+    }
+
     fn move_window_to(&self, window: WindowHandle, desktop: &str) -> Result<(), DesktopError> {
         self.move_to_desktop(window.0, desktop).map_err(DesktopError::Failed)
     }

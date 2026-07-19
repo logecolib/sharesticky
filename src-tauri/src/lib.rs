@@ -178,6 +178,16 @@ fn desktop_monitor_loop(app: tauri::AppHandle) {
                 let _ = app.emit("desktop-changed", &current_id);
             }
             last_desktop_id = current_id.clone();
+
+            // Keep manager window on every desktop
+            if let Some(manager) = app.get_webview_window("manager") {
+                if let Ok(h) = manager.hwnd() {
+                    let hwnd = h.0 as isize;
+                    if !vds.is_on_current_desktop(hwnd).unwrap_or(true) {
+                        let _ = vds.move_to_desktop(hwnd, &current_id);
+                    }
+                }
+            }
         }
 
         // Move stickies assigned to the current desktop (or all desktops)

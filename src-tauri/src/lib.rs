@@ -150,8 +150,9 @@ fn setup_desktop_monitor(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
 /// to follow the user. Emits `desktop-changed` events.
 #[cfg(target_os = "windows")]
 fn desktop_monitor_loop(app: tauri::AppHandle) {
+    use platform::availability::{AvailabilityTracker, Transition};
     use platform::placement::ALL_DESKTOPS;
-    use platform::virtual_desktops::{reconcile, VirtualDesktops, WindowHandle};
+    use platform::virtual_desktops::{current_desktop_with_fallback, reconcile, WindowHandle};
     use platform::windows::{DesktopMonitorState, VirtualDesktopService};
 
     // The manager window is treated as a sticky pinned to every desktop.
@@ -168,14 +169,37 @@ fn desktop_monitor_loop(app: tauri::AppHandle) {
     };
 
     let mut last_desktop_id = String::new();
+    let mut availability = AvailabilityTracker::new();
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // Asked through the port rather than the registry directly, so the loop
-        // depends on the trait and not on how Windows happens to store this.
-        let current_id = match vds.current_desktop() {
-            Ok(id) => id,
+        // The manager doubles as the reference window for the COM fallback: it
+        // is one we own and it has been shown, which GetWindowDesktopId needs.
+        let manager = app.get_webview_window("manager");
+        let manager_window = manager
+            .as_ref()
+            .and_then(|m| m.hwnd().ok())
+            .map(|h| WindowHandle(h.0 as isize));
+
+        // Registry first, COM second. The registry keys are absent in some
+        // environments where COM answers perfectly well.
+        let resolved = current_desktop_with_fallback(&vds, manager_window);
+
+        // Report only on transitions - this loop runs twice a second.
+        if let Some(transition) = availability.observe(&resolved) {
+            match transition {
+                Transition::BecameUnavailable(why) => {
+                    log::warn!("Virtual desktops unavailable, windows will not be placed: {why}");
+                }
+                Transition::Recovered(source) => {
+                    log::info!("Virtual desktops available again via {source:?}");
+                }
+            }
+        }
+
+        let current_id = match resolved {
+            Ok((id, _source)) => id,
             Err(_) => continue,
         };
 
@@ -189,11 +213,11 @@ fn desktop_monitor_loop(app: tauri::AppHandle) {
             // The manager is simply pinned to all desktops, so it follows the
             // user. The decision itself lives in platform::placement and is
             // unit tested against a fake; this only supplies the window.
-            if let Some(manager) = app.get_webview_window("manager") {
-                if let Ok(h) = manager.hwnd() {
+            if let Some(window) = manager_window {
+                {
                     let _ = reconcile(
                         &vds,
-                        WindowHandle(h.0 as isize),
+                        window,
                         &follows_everywhere,
                         &current_id,
                     );

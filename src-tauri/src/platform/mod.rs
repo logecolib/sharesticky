@@ -11,6 +11,11 @@ pub mod desktop_id;
 pub mod placement;
 pub mod virtual_desktops;
 
+// Diagnostic only: an #[ignore]d probe asking whether the OS virtual-desktop
+// system works in the current environment. Never runs in the normal suite.
+#[cfg(all(test, target_os = "windows"))]
+pub mod probe;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 

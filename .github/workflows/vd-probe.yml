@@ -1,0 +1,39 @@
+name: VD probe (diagnostic)
+
+# Answers a question we could not settle from documentation: do Windows virtual
+# desktops function on a hosted runner, which has no interactive shell session?
+#
+# Not part of CI. It never gates a merge - its console output is the result.
+# Compare against the same probe run on a developer machine (console session).
+
+on:
+  push:
+    branches: ["experiment/**"]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Probe virtual desktop availability
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Report session context
+        run: |
+          Write-Output "whoami: $(whoami)"
+          Write-Output "SESSIONNAME: $env:SESSIONNAME"
+          Write-Output "Interactive: $([Environment]::UserInteractive)"
+          Write-Output "explorer.exe running: $((Get-Process explorer -ErrorAction SilentlyContinue) -ne $null)"
+          Write-Output "--- VirtualDesktops registry key ---"
+          $k = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops"
+          if (Test-Path $k) { Get-ItemProperty $k | Format-List } else { Write-Output "key does not exist" }
+        shell: pwsh
+
+      - name: Run probe
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib probe -- --ignored --nocapture

@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
 import { useStickiesStore } from "../store/stickies";
 import { listen } from "@tauri-apps/api/event";
-import { openStickyWindow, getCurrentDesktopId, onDesktopChanged } from "../lib/tauri-bridge";
+import {
+  openStickyWindow,
+  getCurrentDesktopId,
+  onDesktopChanged,
+  placeAndFocusSticky,
+} from "../lib/tauri-bridge";
 import type { Sticky } from "../lib/tauri-bridge";
-import { isOnDesktop, isStickyOnCurrentDesktop } from "../lib/desktop-visibility";
+import { isOnDesktop, isStickyOnCurrentDesktop, navigationFor } from "../lib/desktop-visibility";
+import { STICKY_UPDATED_EVENT, type StickyUpdatePayload } from "../lib/sticky-sync";
 import "../styles/manager.css";
 
 function extractPreviewText(content: string): string {
@@ -27,9 +33,25 @@ function formatDate(timestamp: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function StickyCard({ sticky, isOnCurrentDesktop }: { sticky: Sticky; isOnCurrentDesktop: boolean }) {
+function StickyCard({
+  sticky,
+  isOnCurrentDesktop,
+  currentDesktopId,
+}: {
+  sticky: Sticky;
+  isOnCurrentDesktop: boolean;
+  currentDesktopId: string;
+}) {
   const handleClick = async () => {
-    await openStickyWindow(sticky);
+    const destination = navigationFor(sticky.desktop_id, currentDesktopId);
+
+    // One call does create-if-needed, move, then activate. Activating is what
+    // carries us to the window's desktop, and Windows only permits it once per
+    // user action - so this must be the only thing that focuses.
+    await placeAndFocusSticky(
+      sticky,
+      destination.kind === "travel" ? destination.desktopId : undefined,
+    ).catch((err) => console.error("place_and_focus_sticky:", err));
   };
 
   return (
@@ -51,6 +73,7 @@ function ManagerWindow() {
   const loaded = useStickiesStore((s) => s.loaded);
   const loadStickies = useStickiesStore((s) => s.loadStickies);
   const createSticky = useStickiesStore((s) => s.createSticky);
+  const applyRemoteUpdate = useStickiesStore((s) => s.applyRemoteUpdate);
   const [currentDesktopId, setCurrentDesktopId] = useState("");
   const [thisDesktopOnly, setThisDesktopOnly] = useState(true);
 
@@ -60,13 +83,22 @@ function ManagerWindow() {
     }
   }, [loaded, loadStickies]);
 
-  // Reload when stickies change in other windows (e.g. delete from sticky window)
+  // Reload when stickies are added or removed elsewhere.
   useEffect(() => {
     const unlisten = listen("stickies-changed", () => {
       loadStickies();
     });
     return () => { unlisten.then((fn) => fn()); };
   }, [loadStickies]);
+
+  // Edits arrive as deltas, so a sticky being typed into does not cost a reload
+  // of every sticky from SQLite.
+  useEffect(() => {
+    const unlisten = listen<StickyUpdatePayload>(STICKY_UPDATED_EVENT, (event) => {
+      applyRemoteUpdate(event.payload);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [applyRemoteUpdate]);
 
   // Phase 2: Track current virtual desktop
   useEffect(() => {
@@ -125,6 +157,7 @@ function ManagerWindow() {
                 key={sticky.id}
                 sticky={sticky}
                 isOnCurrentDesktop={isStickyOnCurrentDesktop(sticky, currentDesktopId)}
+                currentDesktopId={currentDesktopId}
               />
             ))}
           </div>

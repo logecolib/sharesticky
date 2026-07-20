@@ -10,6 +10,12 @@ import {
   getCurrentDesktopId,
   setStickyDesktops,
 } from "../lib/tauri-bridge";
+import {
+  applyStickyUpdate,
+  debounce,
+  STICKY_UPDATED_EVENT,
+  type StickyUpdatePayload,
+} from "../lib/sticky-sync";
 
 interface StickiesState {
   stickies: Map<string, Sticky>;
@@ -20,7 +26,19 @@ interface StickiesState {
   updateStickyMeta: (id: string, partial: Partial<Sticky>) => Promise<void>;
   deleteSticky: (id: string) => Promise<void>;
   getSticky: (id: string) => Sticky | undefined;
+  /** Fold in a change made in another window. */
+  applyRemoteUpdate: (payload: StickyUpdatePayload) => void;
 }
+
+/**
+ * Content changes are announced on a delay: the editor fires on every
+ * keystroke, and one event per character would have the manager redrawing
+ * constantly. Each sticky window edits exactly one sticky, so a single
+ * debouncer per window is enough.
+ */
+const announceContentChange = debounce((payload: StickyUpdatePayload) => {
+  emit(STICKY_UPDATED_EVENT, payload).catch(() => {});
+}, 250);
 
 export const useStickiesStore = create<StickiesState>((set, get) => ({
   stickies: new Map(),
@@ -71,27 +89,35 @@ export const useStickiesStore = create<StickiesState>((set, get) => ({
   },
 
   updateStickyContent: async (id: string, content: string) => {
+    const updated_at = Date.now();
     set((state) => {
       const next = new Map(state.stickies);
       const existing = next.get(id);
       if (existing) {
-        next.set(id, { ...existing, content, updated_at: Date.now() });
+        next.set(id, { ...existing, content, updated_at });
       }
       return { stickies: next };
     });
     await bridgeUpdateSticky(id, { content });
+    announceContentChange({ id, changes: { content, updated_at } });
   },
 
   updateStickyMeta: async (id: string, partial: Partial<Sticky>) => {
+    const updated_at = Date.now();
     set((state) => {
       const next = new Map(state.stickies);
       const existing = next.get(id);
       if (existing) {
-        next.set(id, { ...existing, ...partial, updated_at: Date.now() });
+        next.set(id, { ...existing, ...partial, updated_at });
       }
       return { stickies: next };
     });
     await bridgeUpdateSticky(id, partial);
+    // Metadata changes are occasional, so they go out immediately.
+    emit(STICKY_UPDATED_EVENT, {
+      id,
+      changes: { ...partial, updated_at },
+    } satisfies StickyUpdatePayload).catch(() => {});
   },
 
   deleteSticky: async (id: string) => {
@@ -107,5 +133,9 @@ export const useStickiesStore = create<StickiesState>((set, get) => ({
 
   getSticky: (id: string) => {
     return get().stickies.get(id);
+  },
+
+  applyRemoteUpdate: (payload: StickyUpdatePayload) => {
+    set((state) => ({ stickies: applyStickyUpdate(state.stickies, payload) }));
   },
 }));

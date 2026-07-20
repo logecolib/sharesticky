@@ -54,3 +54,31 @@ jobs:
 
       - name: Warnings are errors
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Excluded from the denominator, deliberately:
+      #   windows.rs - the unsafe COM shim. Every line is a passthrough to
+      #                Windows, so a test there asserts Microsoft's behaviour
+      #                rather than ours, and windows-rs COM types cannot be
+      #                mocked anyway.
+      #   probe.rs   - #[ignore]d diagnostics; its output is the result.
+      #   lib.rs     - app bootstrap, tray wiring, the polling loop's plumbing.
+      #
+      # commands/ is deliberately *kept* in the denominator. It is untested and
+      # that is real debt, not something to hide.
+      - name: Coverage
+        run: >
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib
+          --ignore-filename-regex '(windows\.rs|probe\.rs|[\\/]lib\.rs|main\.rs)'
+          --fail-under-lines 65
+          --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: lcov.info
+          if-no-files-found: ignore

@@ -6,6 +6,7 @@ import {
   onDesktopChanged,
   placeAndFocusSticky,
   listDesktops,
+  attachedScreens,
 } from "../lib/tauri-bridge";
 import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
 import {
@@ -15,7 +16,7 @@ import {
   navigationFor,
 } from "../lib/desktop-visibility";
 import { STICKY_UPDATED_EVENT, type StickyUpdatePayload } from "../lib/sticky-sync";
-import { restorePlanFor } from "../lib/session";
+import { ensureOnAttachedScreen, restorePlanFor } from "../lib/session";
 import "../styles/manager.css";
 
 function extractPreviewText(content: string): string {
@@ -106,12 +107,28 @@ function ManagerWindow() {
     if (plan.length === 0) return;
 
     (async () => {
+      // Monitors may have changed since the notes were saved. If enumeration
+      // fails we get an empty list, which leaves every note where it was.
+      const screens = await attachedScreens().catch(() => []);
+
       for (const step of plan) {
+        const { sticky } = step;
+        const { x, y } = ensureOnAttachedScreen(
+          {
+            x: sticky.position_x,
+            y: sticky.position_y,
+            width: sticky.width,
+            height: sticky.height,
+          },
+          screens,
+        );
+
         // Reuses the same path as clicking a card, so a restored note lands on
         // its own desktop rather than wherever the app happened to start.
-        await placeAndFocusSticky(step.sticky, step.desktopId).catch((err) =>
-          console.error("restore sticky:", step.sticky.id, err),
-        );
+        await placeAndFocusSticky(
+          { ...sticky, position_x: x, position_y: y },
+          step.desktopId,
+        ).catch((err) => console.error("restore sticky:", sticky.id, err));
       }
     })();
   }, [loaded, stickies]);

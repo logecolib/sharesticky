@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import Database from "@tauri-apps/plugin-sql";
+import { availableMonitors } from "@tauri-apps/api/window";
 
 export interface Sticky {
   id: string;
@@ -109,6 +110,25 @@ export async function listDesktops(): Promise<DesktopInfo[]> {
 
 export async function getCurrentDesktopId(): Promise<string> {
   return invoke<string>("get_current_desktop_id");
+}
+
+/**
+ * Bounds of every attached screen, in **logical** pixels.
+ *
+ * Tauri reports monitors in physical pixels while sticky geometry is stored
+ * logical, so the conversion belongs here at the boundary. Mixing the two is
+ * what made restored notes drift across the screen before (#12).
+ */
+export async function attachedScreens(): Promise<
+  { x: number; y: number; width: number; height: number }[]
+> {
+  const monitors = await availableMonitors();
+  return monitors.map((m) => ({
+    x: m.position.x / m.scaleFactor,
+    y: m.position.y / m.scaleFactor,
+    width: m.size.width / m.scaleFactor,
+    height: m.size.height / m.scaleFactor,
+  }));
 }
 
 /**

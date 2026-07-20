@@ -56,6 +56,42 @@ export interface ScreenBounds {
  * back at coordinates off the visible desktop, which is indistinguishable from
  * having lost it.
  */
+/** Does any part of this rectangle fall on this screen? */
+function overlaps(rect: Rect, screen: ScreenBounds): boolean {
+  return (
+    rect.x < screen.x + screen.width &&
+    rect.x + rect.width > screen.x &&
+    rect.y < screen.y + screen.height &&
+    rect.y + rect.height > screen.y
+  );
+}
+
+/**
+ * Keep a restored note somewhere the user can actually reach it.
+ *
+ * Checked against *every* attached screen, not just the primary: a note living
+ * on a second monitor that is still plugged in must be left where it is.
+ * Only a note that falls on no attached screen at all - because the monitor it
+ * was saved on is gone - gets moved, and then onto the first screen.
+ *
+ * A partly-visible note is left alone; it is reachable, and moving it would be
+ * more surprising than leaving it.
+ */
+export function ensureOnAttachedScreen(
+  rect: Rect,
+  screens: ScreenBounds[],
+): { x: number; y: number } {
+  // Monitor enumeration can fail. Opening the note where it was beats moving it
+  // on the strength of nothing.
+  if (screens.length === 0) return { x: rect.x, y: rect.y };
+
+  if (screens.some((screen) => overlaps(rect, screen))) {
+    return { x: rect.x, y: rect.y };
+  }
+
+  return clampToVisible(rect, screens[0]);
+}
+
 export function clampToVisible(rect: Rect, screen: ScreenBounds): { x: number; y: number } {
   const maxX = screen.x + screen.width - rect.width;
   const maxY = screen.y + screen.height - rect.height;

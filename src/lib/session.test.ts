@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Sticky } from "./tauri-bridge";
-import { clampToVisible, restorePlanFor, type ScreenBounds } from "./session";
+import {
+  clampToVisible,
+  ensureOnAttachedScreen,
+  restorePlanFor,
+  type ScreenBounds,
+} from "./session";
 
 // Deciding what to put back on screen at startup: which notes were showing,
 // and where they should go.
@@ -121,6 +126,78 @@ describe("clampToVisible", () => {
     expect(clampToVisible({ x: 0, y: 0, width: 250, height: 200 }, second)).toEqual({
       x: 1920,
       y: 0,
+    });
+  });
+});
+
+// Restoring against the monitors that are actually attached. The naive version
+// of this - always clamp to the primary - would drag every note off a second
+// monitor that is still plugged in, which would be worse than the bug it fixes.
+describe("ensureOnAttachedScreen", () => {
+  const primary: ScreenBounds = { x: 0, y: 0, width: 1920, height: 1080 };
+  const secondRight: ScreenBounds = { x: 1920, y: 0, width: 1920, height: 1080 };
+  const secondLeft: ScreenBounds = { x: -1920, y: 0, width: 1920, height: 1080 };
+
+  const note = { width: 250, height: 200 };
+
+  it("leaves a note alone when it sits on the primary screen", () => {
+    expect(
+      ensureOnAttachedScreen({ x: 300, y: 200, ...note }, [primary]),
+    ).toEqual({ x: 300, y: 200 });
+  });
+
+  it("leaves a note on a second monitor that is still attached", () => {
+    expect(
+      ensureOnAttachedScreen({ x: 2400, y: 300, ...note }, [primary, secondRight]),
+    ).toEqual({ x: 2400, y: 300 });
+  });
+
+  it("leaves a note on a monitor positioned to the left of the primary", () => {
+    expect(
+      ensureOnAttachedScreen({ x: -1000, y: 300, ...note }, [primary, secondLeft]),
+    ).toEqual({ x: -1000, y: 300 });
+  });
+
+  // The bug this exists for: that monitor is gone now.
+  it("brings back a note whose monitor is no longer attached", () => {
+    const { x, y } = ensureOnAttachedScreen({ x: 2400, y: 300, ...note }, [primary]);
+
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(x).toBeLessThanOrEqual(1920 - note.width);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(y).toBeLessThanOrEqual(1080 - note.height);
+  });
+
+  it("brings back a note saved far off to the left", () => {
+    const { x } = ensureOnAttachedScreen({ x: -5000, y: 100, ...note }, [primary]);
+
+    expect(x).toBe(0);
+  });
+
+  // Partly visible is still reachable - the user can drag it back themselves,
+  // and moving it would be more surprising than leaving it.
+  it("leaves a note that is only partly on screen where it is", () => {
+    expect(
+      ensureOnAttachedScreen({ x: 1800, y: 200, ...note }, [primary]),
+    ).toEqual({ x: 1800, y: 200 });
+  });
+
+  it("uses the first screen as the destination when relocating", () => {
+    const { x, y } = ensureOnAttachedScreen({ x: 9999, y: 9999, ...note }, [
+      secondRight,
+      primary,
+    ]);
+
+    expect(x).toBe(1920 + 1920 - note.width);
+    expect(y).toBe(1080 - note.height);
+  });
+
+  // Monitor enumeration can fail; better to open the note where it was than to
+  // move it based on nothing.
+  it("leaves the note alone when no screens are known", () => {
+    expect(ensureOnAttachedScreen({ x: 4000, y: 4000, ...note }, [])).toEqual({
+      x: 4000,
+      y: 4000,
     });
   });
 });

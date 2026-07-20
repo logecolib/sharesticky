@@ -29,13 +29,23 @@ export default defineConfig({
           branches: 100,
           statements: 100,
         },
-        // Global floor. Deliberately low: most of the codebase predates the
-        // test harness, and blocking CI on legacy coverage would just get the
-        // check disabled. Ratchet this up as modules come under test (#4).
-        lines: 5,
-        functions: 5,
-        branches: 10,
-        statements: 5,
+        // The store holds real behaviour - optimistic writes, desktop tagging,
+        // cross-window announcements - so it is held near the top.
+        "src/store/stickies.ts": {
+          lines: 95,
+          functions: 80,
+          branches: 85,
+          statements: 95,
+        },
+        // Global floor, raised from 5% now that the store and bridge are
+        // covered. Still well under the current 37%, because the remainder is
+        // React components: the manager's logic already lives in tested pure
+        // modules, and TipTap in jsdom is a known tarpit. A floor to stop
+        // regression, not a target to chase.
+        lines: 30,
+        functions: 25,
+        branches: 35,
+        statements: 30,
       },
     },
   },

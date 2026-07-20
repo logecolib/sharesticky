@@ -350,4 +350,34 @@ describe("updateWindowState", () => {
 
     expect(emit).not.toHaveBeenCalled();
   });
+
+  // A window can outlive the note it belongs to - deleted from the manager
+  // while its own window is still closing.
+  it("does not invent a sticky it has never seen", async () => {
+    await useStickiesStore.getState().updateWindowState("ghost", { is_open: 1 });
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+  });
+});
+
+describe("updates for a sticky this window does not hold", () => {
+  beforeEach(async () => {
+    vi.mocked(getAllStickies).mockResolvedValue([sticky({ id: "a" })]);
+    await useStickiesStore.getState().loadStickies();
+    vi.clearAllMocks();
+  });
+
+  it("still writes a content change through, without inventing a card", async () => {
+    await useStickiesStore.getState().updateStickyContent("ghost", "text");
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+    expect(bridgeUpdateSticky).toHaveBeenCalledWith("ghost", { content: "text" });
+  });
+
+  it("still writes a metadata change through, without inventing a card", async () => {
+    await useStickiesStore.getState().updateStickyMeta("ghost", { color: "#fff" });
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+    expect(bridgeUpdateSticky).toHaveBeenCalledWith("ghost", { color: "#fff" });
+  });
 });

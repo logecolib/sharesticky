@@ -148,6 +148,168 @@ mod tests {
         println!("\n=== end probe ===\n");
     }
 
+    /// Does activating a window that lives on another virtual desktop make
+    /// Windows switch to that desktop?
+    ///
+    /// This matters because there is **no documented API to switch the active
+    /// virtual desktop**. `IVirtualDesktopManager` only moves windows.
+    /// Activation-follows is the only route that does not require the
+    /// undocumented `IVirtualDesktopManagerInternal`.
+    ///
+    /// Moves the screen between desktops while running, and puts it back.
+    #[test]
+    #[ignore = "diagnostic probe; switches virtual desktops. Run with --ignored --nocapture"]
+    fn probe_whether_activating_a_window_switches_desktop() {
+        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, SwitchToThisWindow};
+
+        use crate::platform::windows::VirtualDesktopService;
+
+        println!("\n=== Does activating a window switch virtual desktop? ===");
+
+        let vds = match VirtualDesktopService::new_with_com_init() {
+            Ok(v) => v,
+            Err(e) => {
+                println!("  [SKIP] no virtual desktop service: {e}");
+                return;
+            }
+        };
+
+        let start = match get_current_desktop_from_registry() {
+            Ok(id) => id,
+            Err(e) => {
+                println!("  [SKIP] cannot read current desktop: {e}");
+                return;
+            }
+        };
+        let desktops = list_desktops_from_registry().unwrap_or_default();
+        let target = match desktops.iter().find(|d| d.id != start) {
+            Some(d) => d.id.clone(),
+            None => {
+                println!("  [SKIP] need at least two desktops; found {}", desktops.len());
+                return;
+            }
+        };
+
+        println!("  start desktop:  {start}");
+        println!("  target desktop: {target}");
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("vd-switch-probe"),
+                WS_OVERLAPPEDWINDOW,
+                100,
+                100,
+                300,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let hwnd = match hwnd {
+            Ok(h) if !h.0.is_null() => h,
+            _ => {
+                println!("  [FAIL] could not create a probe window");
+                return;
+            }
+        };
+
+        // Must be shown, or it is not registered with the VD system at all.
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        if let Err(e) = vds.move_to_desktop(hwnd.0 as isize, &target) {
+            println!("  [FAIL] MoveWindowToDesktop: {e}");
+            let _ = unsafe { DestroyWindow(hwnd) };
+            return;
+        }
+        println!("  [ ok ] moved probe window to the target desktop");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Windows only grants SetForegroundWindow to a process that already owns
+        // the foreground or received the last input event. A test binary run
+        // from a terminal has neither, and the call is silently refused - which
+        // would look identical to "activation does not switch desktops".
+        //
+        // Synthesising a harmless keypress gives this process the input claim,
+        // putting it in the same position as the real app when the user has
+        // just clicked the manager window.
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                keybd_event, KEYEVENTF_KEYUP, VK_MENU,
+            };
+            keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
+            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+
+        // Attempt 1: the documented activation call.
+        let brought = unsafe { SetForegroundWindow(hwnd) };
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let after_setfg = get_current_desktop_from_registry().unwrap_or_default();
+        println!(
+            "  SetForegroundWindow returned {} -> current desktop is now {}",
+            brought.as_bool(),
+            after_setfg
+        );
+        println!(
+            "    => {}",
+            if after_setfg == target {
+                "SWITCHED to the window's desktop"
+            } else {
+                "did NOT switch"
+            }
+        );
+
+        // Attempt 2: only if the documented call did not do it.
+        if after_setfg != target {
+            unsafe { SwitchToThisWindow(hwnd, true) };
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            let after_switch = get_current_desktop_from_registry().unwrap_or_default();
+            println!("  SwitchToThisWindow -> current desktop is now {after_switch}");
+            println!(
+                "    => {}",
+                if after_switch == target {
+                    "SWITCHED (but via a call Microsoft documents as not for general use)"
+                } else {
+                    "did NOT switch"
+                }
+            );
+        }
+
+        // Put the machine back where we found it.
+        println!("\n  restoring the starting desktop...");
+        let _ = vds.move_to_desktop(hwnd.0 as isize, &start);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // The input claim is consumed by the first activation, so take a fresh
+        // one - otherwise this call is refused and the machine is left on the
+        // target desktop.
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                keybd_event, KEYEVENTF_KEYUP, VK_MENU,
+            };
+            keybd_event(VK_MENU.0 as u8, 0, Default::default(), 0);
+            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let _ = unsafe { DestroyWindow(hwnd) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let ended_on = get_current_desktop_from_registry().unwrap_or_default();
+        println!(
+            "  ended on {} ({})",
+            ended_on,
+            if ended_on == start { "restored" } else { "NOT restored - switch back manually" }
+        );
+
+        println!("=== end switch probe ===\n");
+    }
+
     fn probe_window(manager: &IVirtualDesktopManager, hwnd: HWND) {
         unsafe {
             match manager.GetWindowDesktopId(hwnd) {

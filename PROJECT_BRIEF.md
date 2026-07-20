@@ -68,8 +68,8 @@ Everything here was **measured** with `platform/probe.rs`, not inferred.
     on every desktop. `MoveWindowToDesktop` afterwards **returns `Ok` and
     changes nothing**.
 - The **working baseline** is a plain borderless window (`decorations(false)`,
-  no transparency, no `skip_taskbar`). Sticky notes still get a taskbar button;
-  see the open problem below.
+  no transparency, no `skip_taskbar`). Sticky notes each get a taskbar button as
+  a result, which is accepted — see the decision below.
 - **The registry is the fragile half, not COM** — the opposite of this project's
   original assumption. On a GitHub-hosted runner the VD registry keys do not
   exist while `IVirtualDesktopManager` works fine, so `current_desktop()` reads
@@ -80,10 +80,12 @@ Everything here was **measured** with `platform/probe.rs`, not inferred.
   `innerSize` report physical ones, so mixing them makes restored notes drift
   further across the screen on every restart.
 
-**Still open:** hiding stickies from the taskbar without losing per-desktop
-placement. Both known techniques break it in the ways measured above, and
-re-registration does not work. It may simply be the price of per-desktop
-stickies until Windows exposes something better.
+**Decided, not open: stickies keep their taskbar buttons.** Both known ways to
+hide them break per-desktop placement in the ways measured above, and the damage
+cannot be repaired afterwards. Per-desktop placement is the whole point of the
+app; a taskbar button is not worth losing it for. So the plain borderless window
+stays as-is by choice, and `skip_taskbar` / `WS_EX_TOOLWINDOW` / transparency
+should be treated as things that must not be reintroduced.
 
 ## Automated tests
 
@@ -163,9 +165,10 @@ npm run tauri:build    # release build
    `desktop_id`. Nothing rejects it today.
 3. **Wire up sharing command registry** — `commands/sharing.rs` exists and is
    declared but isn't registered in `lib.rs`'s `invoke_handler`.
-4. **Revisit the taskbar problem** if Windows ever exposes a supported way to
-   drop a taskbar button without touching desktop assignment. The probe to
-   re-check it already exists.
+4. **Do not reintroduce taskbar hiding.** Measured and decided against - see
+   the Phase 2 notes. If Windows ever exposes a supported way to drop a taskbar
+   button without touching desktop assignment, the probe to re-check it already
+   exists.
 
 ### Working agreements
 

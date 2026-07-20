@@ -13,6 +13,7 @@ vi.mock("../lib/tauri-bridge", () => ({
   openStickyWindow: vi.fn(),
   getCurrentDesktopId: vi.fn(),
   setStickyDesktops: vi.fn(),
+  updateStickyWindowState: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(() => Promise.resolve()) }));
@@ -26,6 +27,7 @@ import {
   openStickyWindow,
   setStickyDesktops,
   updateSticky as bridgeUpdateSticky,
+  updateStickyWindowState as bridgeUpdateWindowState,
 } from "../lib/tauri-bridge";
 import { useStickiesStore } from "./stickies";
 import { STICKY_UPDATED_EVENT } from "../lib/sticky-sync";
@@ -302,5 +304,80 @@ describe("applyRemoteUpdate", () => {
     useStickiesStore.getState().applyRemoteUpdate({ id: "ghost", changes: { content: "x" } });
 
     expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+  });
+});
+
+// The manager sorts by updated_at, so window state must not touch it. Otherwise
+// opening or dragging a note jumps its card to the top of the list, under the
+// cursor of whoever just clicked it.
+describe("updateWindowState", () => {
+  beforeEach(async () => {
+    vi.mocked(getAllStickies).mockResolvedValue([sticky({ id: "a", updated_at: 1000 })]);
+    await useStickiesStore.getState().loadStickies();
+    vi.clearAllMocks();
+  });
+
+  it("does not change updated_at when a note is opened", async () => {
+    await useStickiesStore.getState().updateWindowState("a", { is_open: 1 });
+
+    expect(useStickiesStore.getState().getSticky("a")?.updated_at).toBe(1000);
+  });
+
+  it("does not change updated_at when a note is dragged", async () => {
+    await useStickiesStore.getState().updateWindowState("a", { position_x: 500, position_y: 600 });
+
+    expect(useStickiesStore.getState().getSticky("a")?.updated_at).toBe(1000);
+  });
+
+  it("still applies the change locally", async () => {
+    await useStickiesStore.getState().updateWindowState("a", { position_x: 500, is_open: 1 });
+
+    const s = useStickiesStore.getState().getSticky("a");
+    expect(s?.position_x).toBe(500);
+    expect(s?.is_open).toBe(1);
+  });
+
+  it("writes through the path that leaves updated_at alone", async () => {
+    await useStickiesStore.getState().updateWindowState("a", { is_open: 1 });
+
+    expect(bridgeUpdateWindowState).toHaveBeenCalledWith("a", { is_open: 1 });
+    expect(bridgeUpdateSticky).not.toHaveBeenCalled();
+  });
+
+  // No other window shows a note's position or open state.
+  it("does not announce window state to other windows", async () => {
+    await useStickiesStore.getState().updateWindowState("a", { is_open: 1 });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  // A window can outlive the note it belongs to - deleted from the manager
+  // while its own window is still closing.
+  it("does not invent a sticky it has never seen", async () => {
+    await useStickiesStore.getState().updateWindowState("ghost", { is_open: 1 });
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+  });
+});
+
+describe("updates for a sticky this window does not hold", () => {
+  beforeEach(async () => {
+    vi.mocked(getAllStickies).mockResolvedValue([sticky({ id: "a" })]);
+    await useStickiesStore.getState().loadStickies();
+    vi.clearAllMocks();
+  });
+
+  it("still writes a content change through, without inventing a card", async () => {
+    await useStickiesStore.getState().updateStickyContent("ghost", "text");
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+    expect(bridgeUpdateSticky).toHaveBeenCalledWith("ghost", { content: "text" });
+  });
+
+  it("still writes a metadata change through, without inventing a card", async () => {
+    await useStickiesStore.getState().updateStickyMeta("ghost", { color: "#fff" });
+
+    expect(useStickiesStore.getState().getSticky("ghost")).toBeUndefined();
+    expect(bridgeUpdateSticky).toHaveBeenCalledWith("ghost", { color: "#fff" });
   });
 });

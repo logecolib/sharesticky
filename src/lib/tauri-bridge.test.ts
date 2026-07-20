@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/plugin-sql", () => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
-import { deleteSticky, updateSticky } from "./tauri-bridge";
+import { deleteSticky, updateSticky, updateStickyWindowState } from "./tauri-bridge";
 
 beforeEach(() => {
   execute.mockClear();
@@ -100,5 +100,39 @@ describe("deleteSticky", () => {
     expect(sql).toContain("DELETE FROM stickies");
     expect(sql).toContain("WHERE id = $1");
     expect(values).toEqual(["abc"]);
+  });
+});
+
+// Window state - position, size, openness - is not an edit. The manager sorts
+// by updated_at, so stamping it here would make opening or dragging a note jump
+// its card to the top of the list.
+describe("updateStickyWindowState", () => {
+  it("writes the field it was given", async () => {
+    await updateStickyWindowState("abc", { is_open: 1 });
+
+    const { sql, values } = lastStatement();
+    expect(sql).toContain("is_open = $1");
+    expect(values[0]).toBe(1);
+  });
+
+  it("does not stamp updated_at", async () => {
+    await updateStickyWindowState("abc", { is_open: 1 });
+
+    const { sql } = lastStatement();
+    expect(sql).not.toContain("updated_at");
+  });
+
+  it("matches on the sticky's id straight after the fields", async () => {
+    await updateStickyWindowState("abc", { position_x: 5, position_y: 6 });
+
+    const { sql, values } = lastStatement();
+    expect(sql).toContain("WHERE id = $3");
+    expect(values[values.length - 1]).toBe("abc");
+  });
+
+  it("does nothing when given no fields", async () => {
+    await updateStickyWindowState("abc", {});
+
+    expect(execute).not.toHaveBeenCalled();
   });
 });

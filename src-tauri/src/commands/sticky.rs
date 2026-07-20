@@ -39,6 +39,13 @@ fn ensure_sticky_window(
         .always_on_top(options.pinned)
         .inner_size(options.width, options.height)
         .position(options.position_x, options.position_y)
+        // Created unfocused on purpose. A window that is *already* foreground
+        // cannot be activated, and activation is the only documented way to
+        // carry the user to another virtual desktop - so a window that grabs
+        // focus on creation makes the later SetForegroundWindow a silent no-op.
+        // This is what made travelling to a sticky's desktop work only on a
+        // second click, once the window existed and no longer had focus.
+        .focused(false)
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -108,19 +115,31 @@ pub async fn place_and_focus_sticky(
 
     #[cfg(target_os = "windows")]
     if let Some(target) = desktop_id.as_deref() {
-        use crate::platform::virtual_desktops::{VirtualDesktops, WindowHandle};
+        use crate::platform::virtual_desktops::{
+            wait_until_registered, VirtualDesktops, WindowHandle,
+        };
 
-        // Let the shell finish registering the newly shown window.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        let hwnd = WindowHandle(window.hwnd().map_err(|e| e.to_string())?.0 as isize);
         let vds = app.state::<crate::platform::windows::VirtualDesktopService>();
-        vds.move_window_to(WindowHandle(hwnd.0 as isize), target)
-            .map_err(|e| e.to_string())?;
-        log::info!("Moved {label} to desktop {target} before activating it");
+        let now = std::time::Instant::now;
+        let sleep: fn(std::time::Duration) = std::thread::sleep;
 
-        // And to finish re-homing it before we ask to be taken there.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Ask until the shell acknowledges the window rather than sleeping a
+        // guess at how long that takes. Moving a window the virtual-desktop
+        // system does not yet know about reports success and achieves nothing -
+        // which is what made this work only on a second click.
+        if let Err(e) = wait_until_registered(&*vds, hwnd, None, now, sleep) {
+            log::warn!("{label} never registered with the desktop system: {e}");
+        }
+
+        vds.move_window_to(hwnd, target).map_err(|e| e.to_string())?;
+
+        // And wait for the move to actually take, so the activation below has
+        // somewhere to carry the user to.
+        match wait_until_registered(&*vds, hwnd, Some(target), now, sleep) {
+            Ok(id) => log::info!("Moved {label} to desktop {id}, activating"),
+            Err(e) => log::warn!("{label} did not settle on {target}: {e}"),
+        }
     }
     #[cfg(not(target_os = "windows"))]
     let _ = desktop_id;
@@ -132,14 +151,39 @@ pub async fn place_and_focus_sticky(
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
 
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-        let brought = unsafe { SetForegroundWindow(HWND(hwnd.0 as *mut _)) };
-        log::info!("SetForegroundWindow({label}) -> {}", brought.as_bool());
-        if !brought.as_bool() {
-            // Foreground was refused; fall back so the window at least shows.
-            window.set_focus().map_err(|e| e.to_string())?;
+        use crate::platform::windows::get_current_desktop_from_registry;
+
+        let hwnd = HWND(window.hwnd().map_err(|e| e.to_string())?.0 as *mut _);
+
+        // Activating is what carries the user across desktops. It does not
+        // always take on the first attempt, so check whether it actually
+        // happened rather than assuming, and try again if not.
+        let attempts = if desktop_id.is_some() { 3 } else { 1 };
+        for attempt in 1..=attempts {
+            let already_foreground = unsafe { GetForegroundWindow() } == hwnd;
+            let brought = unsafe { SetForegroundWindow(hwnd) };
+
+            let landed = match desktop_id.as_deref() {
+                None => true,
+                Some(target) => {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    get_current_desktop_from_registry()
+                        .map(|now| now.eq_ignore_ascii_case(target))
+                        .unwrap_or(false)
+                }
+            };
+
+            log::info!(
+                "activate {label} attempt {attempt}/{attempts}: \
+                 already_foreground={already_foreground} setfg={} landed={landed}",
+                brought.as_bool()
+            );
+
+            if landed {
+                break;
+            }
         }
     }
     #[cfg(not(target_os = "windows"))]

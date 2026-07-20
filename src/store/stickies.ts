@@ -9,7 +9,13 @@ import {
   openStickyWindow,
   getCurrentDesktopId,
   setStickyDesktops,
+  updateStickyWindowState as bridgeUpdateWindowState,
 } from "../lib/tauri-bridge";
+
+/** The parts of a sticky that describe its window rather than its content. */
+export type WindowState = Partial<
+  Pick<Sticky, "position_x" | "position_y" | "width" | "height" | "is_open">
+>;
 import {
   applyStickyUpdate,
   debounce,
@@ -24,6 +30,8 @@ interface StickiesState {
   createSticky: (color?: string) => Promise<Sticky>;
   updateStickyContent: (id: string, content: string) => Promise<void>;
   updateStickyMeta: (id: string, partial: Partial<Sticky>) => Promise<void>;
+  /** Window state - position, size, openness. Does not count as an edit. */
+  updateWindowState: (id: string, partial: WindowState) => Promise<void>;
   deleteSticky: (id: string) => Promise<void>;
   getSticky: (id: string) => Sticky | undefined;
   /** Fold in a change made in another window. */
@@ -137,5 +145,20 @@ export const useStickiesStore = create<StickiesState>((set, get) => ({
 
   applyRemoteUpdate: (payload: StickyUpdatePayload) => {
     set((state) => ({ stickies: applyStickyUpdate(state.stickies, payload) }));
+  },
+
+  updateWindowState: async (id: string, partial: WindowState) => {
+    set((state) => {
+      const next = new Map(state.stickies);
+      const existing = next.get(id);
+      if (existing) {
+        // No updated_at: where a note sits and whether it is open are not
+        // edits, and the manager sorts by updated_at.
+        next.set(id, { ...existing, ...partial });
+      }
+      return { stickies: next };
+    });
+    await bridgeUpdateWindowState(id, partial);
+    // Not announced either: no other window displays this.
   },
 }));

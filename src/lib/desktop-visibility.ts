@@ -42,6 +42,33 @@ export function isOnDesktop(desktopId: string, currentDesktopId: string): boolea
   return ids.has(currentDesktopId);
 }
 
+/**
+ * What clicking a sticky in the manager should do.
+ *
+ * `travel` means the window must be placed on that desktop before being
+ * activated - Windows has no documented call to switch desktops directly, so
+ * the app gets there by activating a window that lives on the target.
+ */
+export type Navigation =
+  | { kind: "focus" }
+  | { kind: "travel"; desktopId: string };
+
+/**
+ * Decide where clicking a sticky should take you.
+ *
+ * Errs towards staying put: we only travel when the sticky positively lives
+ * somewhere else and we know where "here" is.
+ */
+export function navigationFor(desktopId: string, currentDesktopId: string): Navigation {
+  if (!currentDesktopId) return { kind: "focus" };
+  if (isOnDesktop(desktopId, currentDesktopId)) return { kind: "focus" };
+
+  // Not here, so travel to the first desktop it names. Insertion order is
+  // preserved by parseDesktopIds, which keeps the destination predictable.
+  const [first] = parseDesktopIds(desktopId);
+  return first ? { kind: "travel", desktopId: first } : { kind: "focus" };
+}
+
 /** The subset of a sticky this module needs in order to place it. */
 export interface DesktopPlaceable {
   desktop_id: string;

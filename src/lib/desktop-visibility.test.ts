@@ -3,6 +3,7 @@ import {
   ALL_DESKTOPS,
   isOnDesktop,
   isStickyOnCurrentDesktop,
+  navigationFor,
   parseDesktopIds,
   serializeDesktopIds,
 } from "./desktop-visibility";
@@ -151,5 +152,63 @@ describe("isStickyOnCurrentDesktop", () => {
     expect(isStickyOnCurrentDesktop(sticky(`${DESKTOP_A},${DESKTOP_B}`), DESKTOP_C)).toBe(
       false,
     );
+  });
+});
+
+// Where clicking a sticky in the manager should take you. Windows has no
+// documented way to switch desktops directly - the app gets there by activating
+// a window that already lives on the target - so this only has to decide
+// *which* desktop, if any, the window should be placed on first.
+describe("navigationFor", () => {
+  describe("given a sticky that already lives on this desktop", () => {
+    it("focuses it without travelling", () => {
+      expect(navigationFor(DESKTOP_A, DESKTOP_A)).toEqual({ kind: "focus" });
+    });
+  });
+
+  describe("given a sticky pinned to all desktops", () => {
+    it("focuses it without travelling, since it is already here", () => {
+      expect(navigationFor(ALL_DESKTOPS, DESKTOP_A)).toEqual({ kind: "focus" });
+    });
+  });
+
+  describe("given a sticky that lives only somewhere else", () => {
+    it("travels to the desktop it lives on", () => {
+      expect(navigationFor(DESKTOP_B, DESKTOP_A)).toEqual({
+        kind: "travel",
+        desktopId: DESKTOP_B,
+      });
+    });
+  });
+
+  // The choice recorded on #11: staying put beats travelling to a desktop the
+  // sticky also happens to live on.
+  describe("given a sticky on several desktops, one of which is this one", () => {
+    it("stays here rather than travelling to its first desktop", () => {
+      expect(navigationFor(`${DESKTOP_B},${DESKTOP_A}`, DESKTOP_A)).toEqual({
+        kind: "focus",
+      });
+    });
+  });
+
+  describe("given a sticky on several desktops, none of which is this one", () => {
+    it("travels to the first desktop it names, so the choice is predictable", () => {
+      expect(navigationFor(`${DESKTOP_B},${DESKTOP_C}`, DESKTOP_A)).toEqual({
+        kind: "travel",
+        desktopId: DESKTOP_B,
+      });
+    });
+  });
+
+  describe("given an unassigned sticky", () => {
+    it("focuses it where it is, having nowhere to travel to", () => {
+      expect(navigationFor("", DESKTOP_A)).toEqual({ kind: "focus" });
+    });
+  });
+
+  describe("given the current desktop is unknown", () => {
+    it("focuses rather than guessing at a destination", () => {
+      expect(navigationFor(DESKTOP_B, "")).toEqual({ kind: "focus" });
+    });
   });
 });

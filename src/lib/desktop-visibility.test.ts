@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_DESKTOPS,
+  currentDesktopName,
   isOnDesktop,
   isStickyOnCurrentDesktop,
   describeDesktops,
@@ -260,5 +261,42 @@ describe("describeDesktops", () => {
   // one, and a row of hex would be worse than a blank that fills in a moment later.
   it("says nothing while the desktop list has not loaded yet", () => {
     expect(describeDesktops(DESKTOP_A, [])).toBe("");
+  });
+});
+
+// The manager header shows which desktop you are on, since the app name is
+// already in the title bar and the taskbar.
+describe("currentDesktopName", () => {
+  const desktops = [
+    { id: DESKTOP_A, name: "Work", is_current: true },
+    { id: DESKTOP_B, name: "Personal", is_current: false },
+  ];
+
+  it("names the desktop the user is on", () => {
+    expect(currentDesktopName(desktops, DESKTOP_A)).toBe("Work");
+  });
+
+  it("follows the current desktop when it changes", () => {
+    expect(currentDesktopName(desktops, DESKTOP_B)).toBe("Personal");
+  });
+
+  // The desktop list arrives a moment after the id does.
+  it("falls back to the desktop flagged as current while the id is unknown", () => {
+    expect(currentDesktopName(desktops, "")).toBe("Work");
+  });
+
+  // A desktop removed since the id was read, or virtual desktops unavailable.
+  it("returns nothing when the desktop cannot be identified", () => {
+    expect(currentDesktopName([], DESKTOP_A)).toBe("");
+    expect(currentDesktopName([], "")).toBe("");
+  });
+
+  it("returns nothing when the id is not among the known desktops", () => {
+    expect(currentDesktopName([{ id: DESKTOP_B, name: "Personal", is_current: false }], DESKTOP_A)).toBe("");
+  });
+
+  it("prefers the id over the flag when they disagree", () => {
+    // The flag comes from a registry read that may be a poll behind.
+    expect(currentDesktopName(desktops, DESKTOP_B)).toBe("Personal");
   });
 });

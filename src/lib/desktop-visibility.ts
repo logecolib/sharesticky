@@ -46,6 +46,24 @@ export function isOnDesktop(desktopId: string, currentDesktopId: string): boolea
 export interface NamedDesktop {
   id: string;
   name: string;
+  is_current?: boolean;
+}
+
+/**
+ * Name of the desktop the user is currently on, or `""` if it cannot be told.
+ *
+ * Prefers the id, which is read fresh on every desktop change, and falls back
+ * to the `is_current` flag from the desktop list - useful in the moment after
+ * startup when the list has arrived but the id has not.
+ */
+export function currentDesktopName(
+  desktops: NamedDesktop[],
+  currentDesktopId: string,
+): string {
+  if (currentDesktopId) {
+    return desktops.find((d) => d.id === currentDesktopId)?.name ?? "";
+  }
+  return desktops.find((d) => d.is_current)?.name ?? "";
 }
 
 /**

@@ -10,6 +10,7 @@ import {
 } from "../lib/tauri-bridge";
 import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
 import {
+  currentDesktopName,
   describeDesktops,
   isOnDesktop,
   isStickyOnCurrentDesktop,
@@ -172,6 +173,8 @@ function ManagerWindow() {
     return () => { unlisten?.(); };
   }, []);
 
+  const desktopName = currentDesktopName(desktops, currentDesktopId);
+
   const stickiesList = Array.from(stickies.values())
     .filter((s) => {
       if (!thisDesktopOnly || !currentDesktopId) return true;
@@ -187,7 +190,10 @@ function ManagerWindow() {
   return (
     <div className="manager-window">
       <div className="manager-header">
-        <h1>ShareSticky</h1>
+        {/* The app name is already in the title bar and the taskbar, so the
+            header shows the desktop being filtered by instead. Falls back to
+            the app name where there is no desktop to name. */}
+        <h1 title={desktopName || undefined}>{desktopName || "ShareSticky"}</h1>
         <div className="manager-header-actions">
           <label className="desktop-filter-checkbox">
             <input

@@ -25,6 +25,17 @@
   font-size: 18px;
   font-weight: 600;
   color: #333;
+  /* Holds the name of the current virtual desktop, which the user chooses and
+     can make arbitrarily long. Truncate rather than push the filter and the
+     New Sticky button off the edge; the full name is in the title attribute. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-header-actions {
+  flex-shrink: 0;
 }
 
 .manager-header-actions {

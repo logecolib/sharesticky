@@ -109,6 +109,29 @@ export async function getCurrentDesktopId(): Promise<string> {
   return invoke<string>("get_current_desktop_id");
 }
 
+/**
+ * Put a sticky's window on `desktopId` (if given) and activate it.
+ *
+ * Activating is what carries the user across virtual desktops; Windows has no
+ * documented call to switch desktops directly.
+ */
+export async function placeAndFocusSticky(
+  sticky: Sticky,
+  desktopId?: string,
+): Promise<void> {
+  return invoke("place_and_focus_sticky", {
+    options: {
+      id: sticky.id,
+      position_x: sticky.position_x,
+      position_y: sticky.position_y,
+      width: sticky.width,
+      height: sticky.height,
+      pinned: sticky.pinned === 1,
+    },
+    desktopId,
+  });
+}
+
 export async function getStickyDesktopId(stickyId: string): Promise<string> {
   return invoke<string>("get_sticky_desktop_id", { stickyId });
 }

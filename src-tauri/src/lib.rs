@@ -109,6 +109,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sticky::open_sticky_window,
             commands::sticky::close_sticky_window,
+            commands::sticky::place_and_focus_sticky,
             commands::desktop::list_desktops,
             commands::desktop::get_current_desktop_id,
             commands::desktop::get_sticky_desktop_id,

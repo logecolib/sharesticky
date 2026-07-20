@@ -1,9 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStickiesStore } from "../store/stickies";
 import { listen } from "@tauri-apps/api/event";
-import { openStickyWindow, getCurrentDesktopId, onDesktopChanged } from "../lib/tauri-bridge";
-import type { Sticky } from "../lib/tauri-bridge";
-import { isOnDesktop, isStickyOnCurrentDesktop } from "../lib/desktop-visibility";
+import {
+  getCurrentDesktopId,
+  onDesktopChanged,
+  placeAndFocusSticky,
+  listDesktops,
+} from "../lib/tauri-bridge";
+import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
+import {
+  describeDesktops,
+  isOnDesktop,
+  isStickyOnCurrentDesktop,
+  navigationFor,
+} from "../lib/desktop-visibility";
+import { STICKY_UPDATED_EVENT, type StickyUpdatePayload } from "../lib/sticky-sync";
+import { restorePlanFor } from "../lib/session";
 import "../styles/manager.css";
 
 function extractPreviewText(content: string): string {
@@ -27,9 +39,29 @@ function formatDate(timestamp: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function StickyCard({ sticky, isOnCurrentDesktop }: { sticky: Sticky; isOnCurrentDesktop: boolean }) {
+function StickyCard({
+  sticky,
+  isOnCurrentDesktop,
+  currentDesktopId,
+  desktops,
+}: {
+  sticky: Sticky;
+  isOnCurrentDesktop: boolean;
+  currentDesktopId: string;
+  desktops: DesktopInfo[];
+}) {
+  const desktopNames = describeDesktops(sticky.desktop_id, desktops);
+
   const handleClick = async () => {
-    await openStickyWindow(sticky);
+    const destination = navigationFor(sticky.desktop_id, currentDesktopId);
+
+    // One call does create-if-needed, move, then activate. Activating is what
+    // carries us to the window's desktop, and Windows only permits it once per
+    // user action - so this must be the only thing that focuses.
+    await placeAndFocusSticky(
+      sticky,
+      destination.kind === "travel" ? destination.desktopId : undefined,
+    ).catch((err) => console.error("place_and_focus_sticky:", err));
   };
 
   return (
@@ -40,6 +72,7 @@ function StickyCard({ sticky, isOnCurrentDesktop }: { sticky: Sticky; isOnCurren
         <span className="card-date">{formatDate(sticky.updated_at)}</span>
       </div>
       <div className="card-preview">{extractPreviewText(sticky.content)}</div>
+      {desktopNames && <div className="card-desktops">{desktopNames}</div>}
     </div>
   );
 }
@@ -51,8 +84,10 @@ function ManagerWindow() {
   const loaded = useStickiesStore((s) => s.loaded);
   const loadStickies = useStickiesStore((s) => s.loadStickies);
   const createSticky = useStickiesStore((s) => s.createSticky);
+  const applyRemoteUpdate = useStickiesStore((s) => s.applyRemoteUpdate);
   const [currentDesktopId, setCurrentDesktopId] = useState("");
   const [thisDesktopOnly, setThisDesktopOnly] = useState(true);
+  const [desktops, setDesktops] = useState<DesktopInfo[]>([]);
 
   useEffect(() => {
     if (!loaded) {
@@ -60,7 +95,28 @@ function ManagerWindow() {
     }
   }, [loaded, loadStickies]);
 
-  // Reload when stickies change in other windows (e.g. delete from sticky window)
+  // Put back the notes that were on screen when the app last closed. Runs once:
+  // reopening on every load would fight the user closing a note.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!loaded || restored.current) return;
+    restored.current = true;
+
+    const plan = restorePlanFor(Array.from(stickies.values()));
+    if (plan.length === 0) return;
+
+    (async () => {
+      for (const step of plan) {
+        // Reuses the same path as clicking a card, so a restored note lands on
+        // its own desktop rather than wherever the app happened to start.
+        await placeAndFocusSticky(step.sticky, step.desktopId).catch((err) =>
+          console.error("restore sticky:", step.sticky.id, err),
+        );
+      }
+    })();
+  }, [loaded, stickies]);
+
+  // Reload when stickies are added or removed elsewhere.
   useEffect(() => {
     const unlisten = listen("stickies-changed", () => {
       loadStickies();
@@ -68,15 +124,32 @@ function ManagerWindow() {
     return () => { unlisten.then((fn) => fn()); };
   }, [loadStickies]);
 
+  // Edits arrive as deltas, so a sticky being typed into does not cost a reload
+  // of every sticky from SQLite.
+  useEffect(() => {
+    const unlisten = listen<StickyUpdatePayload>(STICKY_UPDATED_EVENT, (event) => {
+      applyRemoteUpdate(event.payload);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [applyRemoteUpdate]);
+
   // Phase 2: Track current virtual desktop
   useEffect(() => {
     getCurrentDesktopId()
       .then((id) => setCurrentDesktopId(id))
       .catch(() => {});
 
+    // Desktop names for the card footers. Re-read on every switch, since the
+    // user may have added, removed or renamed one in the meantime.
+    const refreshDesktops = () => {
+      listDesktops().then(setDesktops).catch(() => {});
+    };
+    refreshDesktops();
+
     let unlisten: (() => void) | undefined;
     onDesktopChanged((desktopId) => {
       setCurrentDesktopId(desktopId);
+      refreshDesktops();
     }).then((fn) => { unlisten = fn; });
 
     return () => { unlisten?.(); };
@@ -125,6 +198,8 @@ function ManagerWindow() {
                 key={sticky.id}
                 sticky={sticky}
                 isOnCurrentDesktop={isStickyOnCurrentDesktop(sticky, currentDesktopId)}
+                currentDesktopId={currentDesktopId}
+                desktops={desktops}
               />
             ))}
           </div>

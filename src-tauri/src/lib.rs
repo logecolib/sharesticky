@@ -19,12 +19,20 @@ pub fn run() {
             tauri_plugin_sql::Builder::new()
                 .add_migrations(
                     "sqlite:sharesticky.db",
-                    vec![tauri_plugin_sql::Migration {
-                        version: 1,
-                        description: "create stickies table",
-                        sql: storage::database::MIGRATION_V1,
-                        kind: tauri_plugin_sql::MigrationKind::Up,
-                    }],
+                    vec![
+                        tauri_plugin_sql::Migration {
+                            version: 1,
+                            description: "create stickies table",
+                            sql: storage::database::MIGRATION_V1,
+                            kind: tauri_plugin_sql::MigrationKind::Up,
+                        },
+                        tauri_plugin_sql::Migration {
+                            version: 2,
+                            description: "remember which stickies are open",
+                            sql: storage::database::MIGRATION_V2,
+                            kind: tauri_plugin_sql::MigrationKind::Up,
+                        },
+                    ],
                 )
                 .build(),
         )
@@ -109,6 +117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sticky::open_sticky_window,
             commands::sticky::close_sticky_window,
+            commands::sticky::place_and_focus_sticky,
             commands::desktop::list_desktops,
             commands::desktop::get_current_desktop_id,
             commands::desktop::get_sticky_desktop_id,

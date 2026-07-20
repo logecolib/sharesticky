@@ -42,6 +42,66 @@ export function isOnDesktop(desktopId: string, currentDesktopId: string): boolea
   return ids.has(currentDesktopId);
 }
 
+/** Just enough of a desktop to name it. */
+export interface NamedDesktop {
+  id: string;
+  name: string;
+}
+
+/**
+ * Human-readable list of the desktops a sticky lives on, for display.
+ *
+ * Returns an empty string when there is nothing useful to say - an unassigned
+ * sticky, or a desktop list that has not arrived yet.
+ */
+export function describeDesktops(desktopId: string, desktops: NamedDesktop[]): string {
+  const ids = parseDesktopIds(desktopId);
+  if (ids.size === 0) return "";
+  if (ids.has(ALL_DESKTOPS)) return "All desktops";
+
+  // Until the list loads we cannot tell a real name from a missing one, and a
+  // row of hex reads worse than a blank that fills in a moment later.
+  if (desktops.length === 0) return "";
+
+  const nameOf = new Map(desktops.map((d) => [d.id, d.name]));
+
+  return Array.from(ids)
+    .map((id) => nameOf.get(id) ?? shortDesktopId(id))
+    .join(", ");
+}
+
+/** Last-resort label for a desktop that is no longer in the list. */
+function shortDesktopId(id: string): string {
+  return id.replace(/[{}]/g, "").split("-")[0];
+}
+
+/**
+ * What clicking a sticky in the manager should do.
+ *
+ * `travel` means the window must be placed on that desktop before being
+ * activated - Windows has no documented call to switch desktops directly, so
+ * the app gets there by activating a window that lives on the target.
+ */
+export type Navigation =
+  | { kind: "focus" }
+  | { kind: "travel"; desktopId: string };
+
+/**
+ * Decide where clicking a sticky should take you.
+ *
+ * Errs towards staying put: we only travel when the sticky positively lives
+ * somewhere else and we know where "here" is.
+ */
+export function navigationFor(desktopId: string, currentDesktopId: string): Navigation {
+  if (!currentDesktopId) return { kind: "focus" };
+  if (isOnDesktop(desktopId, currentDesktopId)) return { kind: "focus" };
+
+  // Not here, so travel to the first desktop it names. Insertion order is
+  // preserved by parseDesktopIds, which keeps the destination predictable.
+  const [first] = parseDesktopIds(desktopId);
+  return first ? { kind: "travel", desktopId: first } : { kind: "focus" };
+}
+
 /** The subset of a sticky this module needs in order to place it. */
 export interface DesktopPlaceable {
   desktop_id: string;

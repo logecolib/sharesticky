@@ -7,6 +7,7 @@ import StickyEditor from "./StickyEditor";
 import StickyToolbar from "./StickyToolbar";
 import { useStickiesStore } from "../store/stickies";
 import { parseDesktopIds } from "../lib/desktop-visibility";
+import { debounce } from "../lib/sticky-sync";
 import {
   moveStickyToDesktop,
   setStickyDesktops,
@@ -42,6 +43,55 @@ function StickyWindow({ label }: StickyWindowProps) {
     });
     return unsub;
   }, [stickyId]);
+
+  // Remember where this note is and that it is showing, so a restart can put
+  // it back. Dragging and resizing fire continuously, hence the debounce.
+  useEffect(() => {
+    if (!loaded) return;
+
+    const window = getCurrentWindow();
+    const save = debounce((partial: Partial<Sticky>) => {
+      useStickiesStore.getState().updateStickyMeta(stickyId, partial);
+    }, 400);
+
+    const saveGeometry = async () => {
+      try {
+        // outerPosition and innerSize report *physical* pixels, while the
+        // window builder that restores them takes *logical* ones. On a scaled
+        // display those differ, and saving physical values would make every
+        // restore land in the wrong place - then save that wrong place back,
+        // so the note walks across the screen a little further each restart.
+        const scale = await window.scaleFactor();
+        const [physicalPos, physicalSize] = await Promise.all([
+          window.outerPosition(),
+          window.innerSize(),
+        ]);
+        const pos = physicalPos.toLogical(scale);
+        const size = physicalSize.toLogical(scale);
+
+        save({
+          position_x: pos.x,
+          position_y: pos.y,
+          width: size.width,
+          height: size.height,
+        });
+      } catch {
+        // Window is going away; nothing worth saving.
+      }
+    };
+
+    // Mark it open now, in case this window was restored or opened directly.
+    useStickiesStore.getState().updateStickyMeta(stickyId, { is_open: 1 });
+
+    const unlistenMoved = window.onMoved(saveGeometry);
+    const unlistenResized = window.onResized(saveGeometry);
+
+    return () => {
+      save.cancel();
+      unlistenMoved.then((fn) => fn());
+      unlistenResized.then((fn) => fn());
+    };
+  }, [loaded, stickyId]);
 
   // Handle desktop menu actions from the Rust global on_menu_event handler
   useEffect(() => {
@@ -117,6 +167,13 @@ function StickyWindow({ label }: StickyWindowProps) {
     [sticky, stickyId]
   );
 
+  // Closing a note hides it; it is not deleted. Record that so a restart does
+  // not bring back something the user deliberately put away.
+  const handleClose = useCallback(async () => {
+    await updateStickyMeta(stickyId, { is_open: 0 }).catch(() => {});
+    await getCurrentWindow().close();
+  }, [stickyId, updateStickyMeta]);
+
   if (!sticky) {
     return (
       <div className="sticky-window" style={{ backgroundColor: "#fff9c4" }}>
@@ -128,7 +185,7 @@ function StickyWindow({ label }: StickyWindowProps) {
 
   return (
     <div className="sticky-window" style={{ backgroundColor: sticky.color }} onContextMenu={handleContextMenu}>
-      <StickyDragHandle />
+      <StickyDragHandle onClose={handleClose} />
       <StickyEditor stickyId={stickyId} initialContent={sticky.content} />
       <StickyToolbar stickyId={stickyId} currentColor={sticky.color} pinned={sticky.pinned} />
     </div>

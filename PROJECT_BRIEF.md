@@ -1,6 +1,6 @@
 # ShareSticky — Project Brief
 
-_Last reviewed: 2026-06-28_
+_Last reviewed: 2026-07-19_
 
 ## What it is
 
@@ -29,41 +29,63 @@ src/                       React frontend
   sync/*                   yjs-provider, webrtc-sync (STUBS)
 src-tauri/src/             Rust backend
   lib.rs                   tray menu, desktop-monitor polling thread, command registry
-  commands/                sticky (window open/close), desktop (VD ops), sharing (STUB)
-  platform/windows.rs      VirtualDesktopService (COM + registry)
-  storage/database.rs      SQLite schema (migration v1)
+  commands/                sticky (windows), desktop (VD ops), desktop_menu (pure), sharing (STUB)
+  platform/                port + fake, pure policy/encoding, probe; windows.rs is the COM shim
+  storage/database.rs      SQLite schema (migrations v1, v2)
   storage/encryption.rs    AES encryption (STUB)
   sync/                    yrs_manager, lan, transport (STUBS)
 ```
 
 ## Current status
 
-The project is in **Phase 2**, partly complete and not fully committed.
+**Phase 2 is complete and merged.** Everything below is on `main` with CI green.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | **Phase 1** | Local sticky notes: create, edit (rich text), move, color, persist to SQLite | ✅ Working |
-| **Phase 2** | Virtual desktop awareness: tag stickies per desktop, follow/pin across desktops, manager "this desktop" filter | 🟡 WIP — core works, uncommitted changes present |
+| **Phase 2** | Virtual desktop awareness: per-desktop tagging, follow/pin, manager filter and desktop labels, travel-to-desktop, session restore | ✅ Working |
 | **Phase 3** | P2P sync (Yjs/Yrs CRDTs, LAN via mDNS+TCP) | ⛔ Not started — stub files only |
 | **Phase 4** | WebRTC sync + AES-256-GCM encryption for shared notes | ⛔ Not started — stub files only |
 
-**Uncommitted work** (3 files): the manager window's "This desktop" filter and
-its CSS, plus a `lib.rs` change so the manager window follows the user across
-all virtual desktops. See `git diff`.
+What Phase 2 ended up covering: stickies tagged to one, several, or all
+desktops; a manager that follows the user everywhere; a "This desktop" filter
+with the desktop names shown on each card; clicking a note carries you to its
+desktop; and open notes with their positions restored on restart.
 
 ### Phase 2 hard-won knowledge (don't relearn the hard way)
 
-- VD tracking **breaks** if you use `skip_taskbar(true)`, `transparent(true)`,
-  `WS_EX_TOOLWINDOW`, or owner windows — each unregisters/cloaks the window from
-  the virtual-desktop system.
+Everything here was **measured** with `platform/probe.rs`, not inferred.
+
+- **`GetWindowDesktopId` returns `0x8002802B` for a window that has never been
+  shown.** An unshown window is not registered with the virtual-desktop system
+  at all. This is why a sticky must be shown *before* it is moved to another
+  desktop — otherwise activating it cannot carry the user there.
+- **Hiding from the taskbar has two distinct failure modes**, not one:
+  - `WS_EX_TOOLWINDOW` — even applied after the window is shown — makes the
+    window **unregistered** (`0x8002802B`).
+  - `ITaskbarList::DeleteTab` (what `skip_taskbar(true)` uses) leaves the window
+    registered but sets its desktop to **GUID_NULL** — which is why it appeared
+    on every desktop. `MoveWindowToDesktop` afterwards **returns `Ok` and
+    changes nothing**.
 - The **working baseline** is a plain borderless window (`decorations(false)`,
-  no transparency, no skip_taskbar).
-- The app uses the **documented `IVirtualDesktopManager` COM API + registry
-  reads** (not the `winvd` crate) for stability across Windows updates.
-- Current desktop / desktop list are read from
-  `HKCU\...\Explorer\VirtualDesktops\*` in the registry.
-- An open Phase 2 problem: **hide stickies from the taskbar without breaking VD
-  tracking** (still unsolved).
+  no transparency, no `skip_taskbar`). Sticky notes each get a taskbar button as
+  a result, which is accepted — see the decision below.
+- **The registry is the fragile half, not COM** — the opposite of this project's
+  original assumption. On a GitHub-hosted runner the VD registry keys do not
+  exist while `IVirtualDesktopManager` works fine, so `current_desktop()` reads
+  the registry first and falls back to COM.
+- Registry locations: `HKCU\...\Explorer\VirtualDesktops\{VirtualDesktopIDs,
+  CurrentVirtualDesktop,Desktops\{GUID}\Name}`.
+- Window geometry must be stored in **logical** pixels. `outerPosition` and
+  `innerSize` report physical ones, so mixing them makes restored notes drift
+  further across the screen on every restart.
+
+**Decided, not open: stickies keep their taskbar buttons.** Both known ways to
+hide them break per-desktop placement in the ways measured above, and the damage
+cannot be repaired afterwards. Per-desktop placement is the whole point of the
+app; a taskbar button is not worth losing it for. So the plain borderless window
+stays as-is by choice, and `skip_taskbar` / `WS_EX_TOOLWINDOW` / transparency
+should be treated as things that must not be reintroduced.
 
 ## Automated tests
 
@@ -92,8 +114,9 @@ cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib `
 - `platform/probe.rs` — `#[ignore]`d diagnostics whose *output* is the result.
 - `lib.rs` / `main.rs` — bootstrap, tray wiring, polling plumbing.
 
-`commands/` is **kept** in the denominator despite being at 0%: that is real
-debt, not something to hide. It is the next target.
+`commands/` is **kept** in the denominator. Its pure parts (`desktop_menu`) are
+fully covered; what remains is Tauri window/menu plumbing and COM calls, which
+is shim in the same sense as `platform/windows.rs`.
 
 100% is an explicit non-goal — the correlation between coverage and defects
 disappears above roughly 70-80%.
@@ -105,7 +128,7 @@ mocked: `platform/probe.rs` asks the OS directly and its output is the
 finding. Run it with
 `cargo test --lib probe -- --ignored --nocapture`.
 
-Two results from it are worth knowing:
+Three results from it are worth knowing:
 
 - **The VD COM API works on a GitHub-hosted runner; the VD registry keys do
   not exist there.** The opposite of this codebase's original assumption, and
@@ -113,8 +136,11 @@ Two results from it are worth knowing:
 - **`GetWindowDesktopId` returns `0x8002802B` for a window that has never been
   shown** — an unshown window is not registered with the virtual-desktop
   system. This is why a sticky must be shown *before* it is moved to another
-  desktop, and it is likely relevant to the open taskbar problem, since
-  `skip_taskbar` unregisters windows the same way.
+  desktop.
+- **Taskbar hiding fails in two different ways** — `WS_EX_TOOLWINDOW`
+  unregisters the window outright, while `DeleteTab` leaves it registered with
+  a null desktop. See the Phase 2 notes above; the distinction matters, because
+  only the first shows up as an error.
 
 ## How to run
 
@@ -130,17 +156,27 @@ npm run tauri:build    # release build
 
 ## Suggested next tasks
 
-1. **Finish & commit Phase 2** — review the 3 uncommitted files, confirm the
-   "this desktop" filter and manager-follow behavior, then commit.
-2. **Solve the taskbar problem** — hide sticky windows from the taskbar without
-   losing virtual-desktop tracking (the main open Phase 2 issue).
+1. **Start Phase 3** — implement `yrs_manager` (CRDT docs persisted to the
+   `yjs_state` BLOB) before touching transport/LAN. The port-and-fake pattern
+   used for virtual desktops applies directly to transport.
+2. **Guard against a null desktop id** — a window whose desktop has been
+   cleared to GUID_NULL reports `{00000000-...}`, which
+   `get_sticky_desktop_id` would happily return and the frontend would store in
+   `desktop_id`. Nothing rejects it today.
 3. **Wire up sharing command registry** — `commands/sharing.rs` exists and is
    declared but isn't registered in `lib.rs`'s `invoke_handler`.
-4. **Start Phase 3** — implement `yrs_manager` (CRDT docs persisted to the
-   `yjs_state` BLOB) before touching transport/LAN.
-5. **Add a minimal test harness** — at least Rust unit tests for
-   `platform::windows` desktop-id parsing and the (future) encryption module,
-   since those are pure logic and easy to regression-test.
+4. **Do not reintroduce taskbar hiding.** Measured and decided against - see
+   the Phase 2 notes. If Windows ever exposes a supported way to drop a taskbar
+   button without touching desktop assignment, the probe to re-check it already
+   exists.
+
+### Working agreements
+
+- **GitHub flow**: issue → branch → granular commits → PR → green CI. Nothing
+  lands on `main` directly.
+- **Test-first for logic; spike-first at the OS boundary.** Where the answer
+  depends on what Windows does, write a probe and measure — do not guess, and do
+  not mock the OS into agreeing with you.
 
 ## Open risks / notes
 

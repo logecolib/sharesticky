@@ -310,6 +310,141 @@ mod tests {
         println!("=== end switch probe ===\n");
     }
 
+    /// Can a window be hidden from the taskbar without losing virtual-desktop
+    /// tracking?
+    ///
+    /// Every obvious approach has been observed to break tracking, and the
+    /// breakage is silent - the note just starts showing on every desktop. Now
+    /// that `0x8002802B` is known to mean "this window is not registered with
+    /// the virtual-desktop system", each technique can be applied and the
+    /// damage measured immediately instead of inferred later.
+    #[test]
+    #[ignore = "diagnostic probe; run with --ignored --nocapture"]
+    fn probe_taskbar_hiding_against_desktop_tracking() {
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOP,
+            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_TOOLWINDOW,
+        };
+
+        use crate::platform::windows::VirtualDesktopService;
+
+        println!("\n=== Taskbar hiding vs virtual desktop tracking ===");
+
+        let vds = match VirtualDesktopService::new_with_com_init() {
+            Ok(v) => v,
+            Err(e) => {
+                println!("  [SKIP] {e}");
+                return;
+            }
+        };
+
+        // Fresh window per technique: once tracking is lost it may not come
+        // back, so techniques must not contaminate each other.
+        let make_window = |title: windows::core::PCWSTR| -> Option<HWND> {
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("STATIC"),
+                    title,
+                    WS_OVERLAPPEDWINDOW,
+                    120,
+                    120,
+                    320,
+                    240,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .ok()
+            .filter(|h| !h.0.is_null())?;
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            Some(hwnd)
+        };
+
+        // Is the virtual-desktop system still willing to talk about this window?
+        let tracked = |vds: &VirtualDesktopService, hwnd: HWND| -> String {
+            match vds.get_desktop_id(hwnd.0 as isize) {
+                Ok(id) => format!("tracked  ({id})"),
+                Err(e) if e.contains("8002802B") => "NOT TRACKED (0x8002802B)".to_string(),
+                Err(e) => format!("error: {e}"),
+            }
+        };
+
+        // --- baseline ------------------------------------------------------
+        if let Some(hwnd) = make_window(w!("vd-taskbar-baseline")) {
+            println!("\n-- baseline: plain borderless window --");
+            println!("  before: {}", tracked(&vds, hwnd));
+            let _ = unsafe { DestroyWindow(hwnd) };
+        }
+
+        // --- WS_EX_TOOLWINDOW, applied after the window is registered ------
+        if let Some(hwnd) = make_window(w!("vd-taskbar-toolwindow")) {
+            println!("\n-- WS_EX_TOOLWINDOW applied after showing --");
+            println!("  before: {}", tracked(&vds, hwnd));
+            unsafe {
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW.0 as isize);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            println!("  after:  {}", tracked(&vds, hwnd));
+            let _ = unsafe { DestroyWindow(hwnd) };
+        }
+
+        // --- ITaskbarList::DeleteTab, which is what skip_taskbar does ------
+        let taskbar: Option<ITaskbarList> = unsafe {
+            CoCreateInstance(&TaskbarList, None, CLSCTX_ALL).ok()
+        };
+        if let Some(list) = taskbar.as_ref() {
+            unsafe {
+                let _ = list.HrInit();
+            }
+
+            if let Some(hwnd) = make_window(w!("vd-taskbar-deletetab")) {
+                println!("\n-- ITaskbarList::DeleteTab (what skip_taskbar uses) --");
+                println!("  before: {}", tracked(&vds, hwnd));
+                let deleted = unsafe { list.DeleteTab(hwnd) };
+                println!("  DeleteTab -> {deleted:?}");
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                println!("  after:  {}", tracked(&vds, hwnd));
+                let _ = unsafe { DestroyWindow(hwnd) };
+            }
+
+            // Does putting it back on a desktop restore tracking?
+            if let Some(hwnd) = make_window(w!("vd-taskbar-deletetab-remove")) {
+                println!("\n-- DeleteTab, then MoveWindowToDesktop to re-register --");
+                let current = get_current_desktop_from_registry().unwrap_or_default();
+                println!("  before: {}", tracked(&vds, hwnd));
+                let _ = unsafe { list.DeleteTab(hwnd) };
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                println!("  after DeleteTab: {}", tracked(&vds, hwnd));
+                match vds.move_to_desktop(hwnd.0 as isize, &current) {
+                    Ok(()) => println!("  MoveWindowToDesktop -> ok"),
+                    Err(e) => println!("  MoveWindowToDesktop -> {e}"),
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                println!("  after re-register: {}", tracked(&vds, hwnd));
+                let _ = unsafe { DestroyWindow(hwnd) };
+            }
+        } else {
+            println!("\n  [FAIL] could not create ITaskbarList");
+        }
+
+        println!("\n=== end taskbar probe ===\n");
+    }
+
     fn probe_window(manager: &IVirtualDesktopManager, hwnd: HWND) {
         unsafe {
             match manager.GetWindowDesktopId(hwnd) {

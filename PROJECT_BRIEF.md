@@ -67,10 +67,54 @@ all virtual desktops. See `git diff`.
 
 ## Automated tests
 
-**None.** There is no test runner configured:
-- No `#[test]` / `#[cfg(test)]` in any Rust file.
-- No vitest/jest in `package.json`; no test scripts.
-- Verification is currently manual (`npm run tauri:dev`).
+Development is **test-first**. New behaviour starts with a failing test.
+
+| Layer | Tool | Run with |
+|-------|------|----------|
+| Rust unit | `cargo test` | `cargo test --manifest-path src-tauri/Cargo.toml --lib` |
+| Rust coverage | `cargo-llvm-cov` | see below |
+| Frontend | Vitest 4 + RTL + jsdom | `npm test` |
+| Frontend coverage | `@vitest/coverage-v8` | `npm run test:coverage` |
+
+Both run on every pull request (`.github/workflows/ci.yml`, `windows-latest`).
+
+```powershell
+cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib `
+  --ignore-filename-regex '(windows\.rs|probe\.rs|[\\/]lib\.rs|main\.rs)' `
+  --fail-under-lines 65
+```
+
+### What is deliberately not covered
+
+- `platform/windows.rs` — the `unsafe` COM shim. Each line is a passthrough to
+  Windows, so a test there asserts Microsoft's behaviour, not ours; and
+  windows-rs COM types cannot be mocked. Verified by review and by the probe.
+- `platform/probe.rs` — `#[ignore]`d diagnostics whose *output* is the result.
+- `lib.rs` / `main.rs` — bootstrap, tray wiring, polling plumbing.
+
+`commands/` is **kept** in the denominator despite being at 0%: that is real
+debt, not something to hide. It is the next target.
+
+100% is an explicit non-goal — the correlation between coverage and defects
+disappears above roughly 70-80%.
+
+### Testing OS behaviour
+
+Virtual-desktop behaviour cannot be faked, so it is spiked rather than
+mocked: `platform/probe.rs` asks the OS directly and its output is the
+finding. Run it with
+`cargo test --lib probe -- --ignored --nocapture`.
+
+Two results from it are worth knowing:
+
+- **The VD COM API works on a GitHub-hosted runner; the VD registry keys do
+  not exist there.** The opposite of this codebase's original assumption, and
+  why `current_desktop()` falls back from registry to COM.
+- **`GetWindowDesktopId` returns `0x8002802B` for a window that has never been
+  shown** — an unshown window is not registered with the virtual-desktop
+  system. This is why a sticky must be shown *before* it is moved to another
+  desktop, and it is likely relevant to the open taskbar problem, since
+  `skip_taskbar` unregisters windows the same way.
 
 ## How to run
 

@@ -13,6 +13,7 @@ export interface Sticky {
   width: number;
   height: number;
   pinned: number; // SQLite integer (0 or 1)
+  is_open: number; // SQLite integer (0 or 1) - was this note showing?
   sharing_tier: number;
   share_key: string;
   created_at: number;
@@ -40,9 +41,10 @@ export async function createSticky(color: string = "#fff9c4"): Promise<Sticky> {
   const now = Date.now();
 
   await db.execute(
-    `INSERT INTO stickies (id, doc_id, content, color, desktop_id, position_x, position_y, width, height, pinned, sharing_tier, share_key, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-    [id, docId, "{}", color, "", 100 + Math.random() * 200, 100 + Math.random() * 200, 250, 200, 0, 0, "", now, now]
+    `INSERT INTO stickies (id, doc_id, content, color, desktop_id, position_x, position_y, width, height, pinned, is_open, sharing_tier, share_key, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+    // A newly created sticky opens immediately, so it starts out on screen.
+    [id, docId, "{}", color, "", 100 + Math.random() * 200, 100 + Math.random() * 200, 250, 200, 0, 1, 0, "", now, now]
   );
 
   const rows = await db.select<Sticky[]>("SELECT * FROM stickies WHERE id = $1", [id]);

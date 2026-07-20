@@ -21,3 +21,12 @@ CREATE TABLE IF NOT EXISTS stickies (
   updated_at INTEGER
 );
 "#;
+
+/// SQL migration v2: remember which stickies were on screen.
+///
+/// Without this, every restart loses the user's working set - the notes they
+/// had open are still in the table, but nothing records that they were
+/// *showing*, so the app comes back empty.
+pub const MIGRATION_V2: &str = r#"
+ALTER TABLE stickies ADD COLUMN is_open INTEGER DEFAULT 0;
+"#;

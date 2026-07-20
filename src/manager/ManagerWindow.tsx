@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStickiesStore } from "../store/stickies";
 import { listen } from "@tauri-apps/api/event";
 import {
-  openStickyWindow,
   getCurrentDesktopId,
   onDesktopChanged,
   placeAndFocusSticky,
@@ -16,6 +15,7 @@ import {
   navigationFor,
 } from "../lib/desktop-visibility";
 import { STICKY_UPDATED_EVENT, type StickyUpdatePayload } from "../lib/sticky-sync";
+import { restorePlanFor } from "../lib/session";
 import "../styles/manager.css";
 
 function extractPreviewText(content: string): string {
@@ -94,6 +94,27 @@ function ManagerWindow() {
       loadStickies();
     }
   }, [loaded, loadStickies]);
+
+  // Put back the notes that were on screen when the app last closed. Runs once:
+  // reopening on every load would fight the user closing a note.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (!loaded || restored.current) return;
+    restored.current = true;
+
+    const plan = restorePlanFor(Array.from(stickies.values()));
+    if (plan.length === 0) return;
+
+    (async () => {
+      for (const step of plan) {
+        // Reuses the same path as clicking a card, so a restored note lands on
+        // its own desktop rather than wherever the app happened to start.
+        await placeAndFocusSticky(step.sticky, step.desktopId).catch((err) =>
+          console.error("restore sticky:", step.sticky.id, err),
+        );
+      }
+    })();
+  }, [loaded, stickies]);
 
   // Reload when stickies are added or removed elsewhere.
   useEffect(() => {

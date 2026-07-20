@@ -19,12 +19,20 @@ pub fn run() {
             tauri_plugin_sql::Builder::new()
                 .add_migrations(
                     "sqlite:sharesticky.db",
-                    vec![tauri_plugin_sql::Migration {
-                        version: 1,
-                        description: "create stickies table",
-                        sql: storage::database::MIGRATION_V1,
-                        kind: tauri_plugin_sql::MigrationKind::Up,
-                    }],
+                    vec![
+                        tauri_plugin_sql::Migration {
+                            version: 1,
+                            description: "create stickies table",
+                            sql: storage::database::MIGRATION_V1,
+                            kind: tauri_plugin_sql::MigrationKind::Up,
+                        },
+                        tauri_plugin_sql::Migration {
+                            version: 2,
+                            description: "remember which stickies are open",
+                            sql: storage::database::MIGRATION_V2,
+                            kind: tauri_plugin_sql::MigrationKind::Up,
+                        },
+                    ],
                 )
                 .build(),
         )

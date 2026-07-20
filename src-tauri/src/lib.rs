@@ -103,9 +103,10 @@ pub fn run() {
         })
         .on_menu_event(|app, event| {
             let id = event.id().0.to_string();
-            // Handle virtual desktop menu items: "vd:<sticky_id>:<desktop_guid_or_*>"
-            if let Some(rest) = id.strip_prefix("vd:") {
-                if let Some((sticky_id, desktop_id)) = rest.split_once(':') {
+            // The id format is owned by commands::desktop_menu, which also
+            // produces it - so the two halves cannot drift apart untested.
+            {
+                if let Some((sticky_id, desktop_id)) = commands::desktop_menu::parse_menu_id(&id) {
                     log::info!("Desktop menu action: sticky={sticky_id} desktop={desktop_id}");
                     let _ = app.emit("desktop-menu-action", serde_json::json!({
                         "sticky_id": sticky_id,

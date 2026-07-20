@@ -49,9 +49,10 @@ function StickyWindow({ label }: StickyWindowProps) {
   useEffect(() => {
     if (!loaded) return;
 
+    const window_state = useStickiesStore.getState().updateWindowState;
     const window = getCurrentWindow();
-    const save = debounce((partial: Partial<Sticky>) => {
-      useStickiesStore.getState().updateStickyMeta(stickyId, partial);
+    const save = debounce((partial: Parameters<typeof window_state>[1]) => {
+      window_state(stickyId, partial);
     }, 400);
 
     const saveGeometry = async () => {
@@ -81,7 +82,7 @@ function StickyWindow({ label }: StickyWindowProps) {
     };
 
     // Mark it open now, in case this window was restored or opened directly.
-    useStickiesStore.getState().updateStickyMeta(stickyId, { is_open: 1 });
+    window_state(stickyId, { is_open: 1 });
 
     const unlistenMoved = window.onMoved(saveGeometry);
     const unlistenResized = window.onResized(saveGeometry);
@@ -170,9 +171,10 @@ function StickyWindow({ label }: StickyWindowProps) {
   // Closing a note hides it; it is not deleted. Record that so a restart does
   // not bring back something the user deliberately put away.
   const handleClose = useCallback(async () => {
-    await updateStickyMeta(stickyId, { is_open: 0 }).catch(() => {});
+    // Window state, not an edit - closing a note must not reorder the manager.
+    await useStickiesStore.getState().updateWindowState(stickyId, { is_open: 0 }).catch(() => {});
     await getCurrentWindow().close();
-  }, [stickyId, updateStickyMeta]);
+  }, [stickyId]);
 
   if (!sticky) {
     return (

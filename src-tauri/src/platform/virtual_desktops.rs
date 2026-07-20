@@ -78,6 +78,54 @@ pub fn current_desktop_with_fallback<V: VirtualDesktops + ?Sized>(
     })
 }
 
+/// How long to keep asking before giving up on a window settling.
+const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+const SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Wait until the virtual-desktop system acknowledges a window.
+///
+/// A window that has just been shown is not registered immediately, and until
+/// it is, moving it does nothing useful - the move reports success and the
+/// later activation has nothing to follow. Sleeping a fixed guess makes that a
+/// race; asking until the answer arrives does not.
+///
+/// `wanted` is the desktop we expect it to report, or `None` to accept any.
+pub fn wait_until_registered<V: VirtualDesktops + ?Sized>(
+    desktops: &V,
+    window: WindowHandle,
+    wanted: Option<&str>,
+    now: impl Fn() -> std::time::Instant,
+    sleep: impl Fn(std::time::Duration),
+) -> Result<DesktopId, DesktopError> {
+    let started = now();
+    // Overwritten before it is ever read; kept so the timeout reports the most
+    // recent reason rather than a generic one.
+    let mut last;
+
+    loop {
+        match desktops.desktop_of_window(window) {
+            Ok(id) => match wanted {
+                // An all-zero id means the window is registered but assigned to
+                // no desktop, which is what taskbar hiding does. Never settle
+                // on it.
+                _ if id.trim_matches(|c| c == '{' || c == '}').replace(['-', '0'], "").is_empty() => {
+                    last = DesktopError::Failed(format!("window reports a null desktop ({id})"));
+                }
+                Some(target) if !id.eq_ignore_ascii_case(target) => {
+                    last = DesktopError::Failed(format!("window is on {id}, waiting for {target}"));
+                }
+                _ => return Ok(id),
+            },
+            Err(e) => last = e,
+        }
+
+        if now().duration_since(started) >= SETTLE_TIMEOUT {
+            return Err(last);
+        }
+        sleep(SETTLE_POLL);
+    }
+}
+
 /// Bring one window in line with where it is supposed to be.
 ///
 /// This is the whole body of the desktop monitor's inner loop, minus the sleep
@@ -117,6 +165,9 @@ pub mod fake {
         /// When set, `current_desktop` fails but window queries still work -
         /// the environment measured on a GitHub-hosted runner.
         no_registry: Mutex<bool>,
+        /// How many more times a window should report itself unregistered,
+        /// mimicking the delay after a window is first shown.
+        unregistered_for: Mutex<HashMap<WindowHandle, u32>>,
     }
 
     impl FakeVirtualDesktops {
@@ -127,7 +178,25 @@ pub mod fake {
                 moves: Mutex::new(Vec::new()),
                 unavailable: Mutex::new(None),
                 no_registry: Mutex::new(false),
+                unregistered_for: Mutex::new(HashMap::new()),
             }
+        }
+
+        /// Make a window report itself unregistered for the next `polls` asks,
+        /// as a freshly shown window does.
+        pub fn unregistered_for(self, window: WindowHandle, polls: u32) -> Self {
+            self.unregistered_for.lock().unwrap().insert(window, polls);
+            self
+        }
+
+        /// Simulate a window whose desktop has been cleared to null, which is
+        /// what hiding it from the taskbar does.
+        pub fn with_null_desktop(self, window: WindowHandle) -> Self {
+            self.windows
+                .lock()
+                .unwrap()
+                .insert(window, "{00000000-0000-0000-0000-000000000000}".to_string());
+            self
         }
 
         /// Simulate an environment whose virtual-desktop registry keys are
@@ -183,6 +252,19 @@ pub mod fake {
 
         fn desktop_of_window(&self, window: WindowHandle) -> Result<DesktopId, DesktopError> {
             self.guard()?;
+
+            // A freshly shown window is not registered straight away. Count
+            // down so tests can exercise the wait rather than assuming it.
+            {
+                let mut pending = self.unregistered_for.lock().unwrap();
+                if let Some(remaining) = pending.get_mut(&window) {
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                        return Err(DesktopError::Failed("Element not found. (0x8002802B)".into()));
+                    }
+                }
+            }
+
             self.windows.lock().unwrap().get(&window).cloned().ok_or_else(|| {
                 // What Windows reports for a window it has not registered.
                 DesktopError::Failed("Element not found. (0x8002802B)".into())
@@ -282,6 +364,93 @@ mod tests {
 
         // Only the first tick had anything to do.
         assert_eq!(desktops.move_count(), 1);
+    }
+
+    mod waiting_for_registration {
+        use super::*;
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        /// A clock that only advances when the code under test sleeps, so the
+        /// timeout is exercised without the test taking any real time.
+        fn fake_clock() -> (impl Fn() -> Instant, impl Fn(Duration)) {
+            let start = Instant::now();
+            let elapsed = std::rc::Rc::new(Cell::new(Duration::ZERO));
+            let read = elapsed.clone();
+            (
+                move || start + read.get(),
+                move |d: Duration| elapsed.set(elapsed.get() + d),
+            )
+        }
+
+        #[test]
+        fn returns_straight_away_for_a_window_already_registered() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A).with_window_on(MANAGER, DESKTOP_A);
+            let (now, sleep) = fake_clock();
+
+            let id = wait_until_registered(&desktops, MANAGER, None, now, sleep).unwrap();
+
+            assert_eq!(id, DESKTOP_A);
+        }
+
+        // The actual bug: a freshly shown window is not registered yet, and the
+        // old code slept a fixed guess and hoped.
+        #[test]
+        fn waits_for_a_window_that_has_only_just_been_shown() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A)
+                .with_window_on(MANAGER, DESKTOP_A)
+                .unregistered_for(MANAGER, 5);
+            let (now, sleep) = fake_clock();
+
+            let id = wait_until_registered(&desktops, MANAGER, None, now, sleep).unwrap();
+
+            assert_eq!(id, DESKTOP_A);
+        }
+
+        #[test]
+        fn waits_until_the_window_reports_the_desktop_it_was_moved_to() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_B).with_window_on(MANAGER, DESKTOP_A);
+            let (now, sleep) = fake_clock();
+
+            // Still on A, so waiting for B must time out rather than settle.
+            let err = wait_until_registered(&desktops, MANAGER, Some(DESKTOP_B), now, sleep)
+                .unwrap_err();
+
+            assert!(err.to_string().contains("waiting for"));
+        }
+
+        #[test]
+        fn settles_once_the_window_reports_the_expected_desktop() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_B).with_window_on(MANAGER, DESKTOP_B);
+            let (now, sleep) = fake_clock();
+
+            let id =
+                wait_until_registered(&desktops, MANAGER, Some(DESKTOP_B), now, sleep).unwrap();
+
+            assert_eq!(id, DESKTOP_B);
+        }
+
+        #[test]
+        fn gives_up_on_a_window_that_never_registers() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A);
+            let (now, sleep) = fake_clock();
+
+            let err = wait_until_registered(&desktops, MANAGER, None, now, sleep).unwrap_err();
+
+            assert!(err.to_string().contains("8002802B"));
+        }
+
+        // A null desktop is what taskbar hiding leaves behind. It is a real
+        // answer from the OS, but it is not a desktop, so never settle on it.
+        #[test]
+        fn refuses_to_settle_on_a_null_desktop() {
+            let desktops = FakeVirtualDesktops::new(DESKTOP_A).with_null_desktop(MANAGER);
+            let (now, sleep) = fake_clock();
+
+            let err = wait_until_registered(&desktops, MANAGER, None, now, sleep).unwrap_err();
+
+            assert!(err.to_string().contains("null desktop"));
+        }
     }
 
     mod current_desktop_with_fallback {

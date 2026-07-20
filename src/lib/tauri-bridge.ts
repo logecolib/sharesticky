@@ -52,13 +52,19 @@ export async function createSticky(color: string = "#fff9c4"): Promise<Sticky> {
   return rows[0];
 }
 
-export async function updateSticky(id: string, data: Partial<Sticky>): Promise<void> {
+async function writeSticky(
+  id: string,
+  data: Partial<Sticky>,
+  { stampUpdatedAt }: { stampUpdatedAt: boolean },
+): Promise<void> {
   const db = await getDb();
   const fields: string[] = [];
   const values: unknown[] = [];
   let paramIdx = 1;
 
   for (const [key, value] of Object.entries(data)) {
+    // Letting the primary key through would renumber the parameters and
+    // update a different row.
     if (key === "id") continue;
     fields.push(`${key} = $${paramIdx}`);
     values.push(value);
@@ -67,15 +73,36 @@ export async function updateSticky(id: string, data: Partial<Sticky>): Promise<v
 
   if (fields.length === 0) return;
 
-  fields.push(`updated_at = $${paramIdx}`);
-  values.push(Date.now());
-  paramIdx++;
+  if (stampUpdatedAt) {
+    fields.push(`updated_at = $${paramIdx}`);
+    values.push(Date.now());
+    paramIdx++;
+  }
 
   values.push(id);
   await db.execute(
     `UPDATE stickies SET ${fields.join(", ")} WHERE id = $${paramIdx}`,
     values
   );
+}
+
+/** Record an edit: content, colour, desktop assignment. Stamps `updated_at`. */
+export async function updateSticky(id: string, data: Partial<Sticky>): Promise<void> {
+  return writeSticky(id, data, { stampUpdatedAt: true });
+}
+
+/**
+ * Record window state - where a note sits, how big it is, whether it is open.
+ *
+ * Deliberately does **not** stamp `updated_at`. The manager sorts by that, so
+ * stamping it here would make merely opening or dragging a note jump its card
+ * to the top of the list, under the cursor of whoever just clicked it.
+ */
+export async function updateStickyWindowState(
+  id: string,
+  data: Partial<Pick<Sticky, "position_x" | "position_y" | "width" | "height" | "is_open">>,
+): Promise<void> {
+  return writeSticky(id, data, { stampUpdatedAt: false });
 }
 
 export async function deleteSticky(id: string): Promise<void> {

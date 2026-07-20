@@ -135,12 +135,18 @@ pub async fn show_desktop_menu(
     #[cfg(not(target_os = "windows"))]
     let desktops: Vec<crate::platform::windows::DesktopInfo> = vec![];
 
-    let is_all = current_desktop_id == "*";
-    let assigned: std::collections::HashSet<String> = if current_desktop_id.is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        current_desktop_id.split(',').map(String::from).collect()
-    };
+    // What the menu should offer, and what is ticked, is decided by
+    // desktop_menu - which is pure and tested, and owns the item-id format that
+    // lib.rs parses back.
+    let choices: Vec<super::desktop_menu::DesktopChoice> = desktops
+        .iter()
+        .map(|d| super::desktop_menu::DesktopChoice {
+            id: d.id.clone(),
+            name: d.name.clone(),
+            is_current: d.is_current,
+        })
+        .collect();
+    let entries = super::desktop_menu::menu_entries(&sticky_id, &choices, &current_desktop_id);
 
     let label = format!("sticky-{}", sticky_id);
     let window = app
@@ -149,30 +155,18 @@ pub async fn show_desktop_menu(
 
     let mut menu_builder = MenuBuilder::new(&app);
 
-    for desktop in &desktops {
-        let is_checked = is_all || assigned.contains(&desktop.id);
-        let display_name = if desktop.is_current {
-            format!("{} (current)", desktop.name)
-        } else {
-            desktop.name.clone()
-        };
-        // ID format: "vd:<sticky_id>:<desktop_guid>" — parsed by global handler
-        let item_id = format!("vd:{}:{}", sticky_id, desktop.id);
-        let item = CheckMenuItemBuilder::with_id(item_id, &display_name)
-            .checked(is_checked)
+    // The last entry is always "All desktops"; it gets a separator before it.
+    let last = entries.len().saturating_sub(1);
+    for (index, entry) in entries.iter().enumerate() {
+        if index == last && last > 0 {
+            menu_builder = menu_builder.separator();
+        }
+        let item = CheckMenuItemBuilder::with_id(&entry.id, &entry.label)
+            .checked(entry.checked)
             .build(&app)
             .map_err(|e| e.to_string())?;
         menu_builder = menu_builder.item(&item);
     }
-
-    menu_builder = menu_builder.separator();
-
-    let all_id = format!("vd:{}:*", sticky_id);
-    let all_item = CheckMenuItemBuilder::with_id(all_id, "All desktops")
-        .checked(is_all)
-        .build(&app)
-        .map_err(|e| e.to_string())?;
-    menu_builder = menu_builder.item(&all_item);
 
     let menu = menu_builder.build().map_err(|e| e.to_string())?;
 

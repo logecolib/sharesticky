@@ -132,6 +132,19 @@
   -webkit-box-orient: vertical;
 }
 
+/* Which desktops the note lives on. Secondary information, so it sits quietly
+   at the bottom-left of the card. margin-top:auto pushes it to the bottom of
+   the card's flex column regardless of how short the preview is. */
+.sticky-card .card-desktops {
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 11px;
+  color: #9a9a9a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .manager-empty {
   display: flex;
   flex-direction: column;

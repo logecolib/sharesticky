@@ -3,6 +3,7 @@ import {
   ALL_DESKTOPS,
   isOnDesktop,
   isStickyOnCurrentDesktop,
+  describeDesktops,
   navigationFor,
   parseDesktopIds,
   serializeDesktopIds,
@@ -210,5 +211,54 @@ describe("navigationFor", () => {
     it("focuses rather than guessing at a destination", () => {
       expect(navigationFor(DESKTOP_B, "")).toEqual({ kind: "focus" });
     });
+  });
+});
+
+// The manager shows which desktops a sticky lives on, underneath its preview.
+describe("describeDesktops", () => {
+  const desktops = [
+    { id: DESKTOP_A, name: "Work", is_current: true },
+    { id: DESKTOP_B, name: "Personal", is_current: false },
+    { id: DESKTOP_C, name: "Music", is_current: false },
+  ];
+
+  it("names the desktop a sticky lives on", () => {
+    expect(describeDesktops(DESKTOP_A, desktops)).toBe("Work");
+  });
+
+  it("lists several desktops separated by commas", () => {
+    expect(describeDesktops(`${DESKTOP_A},${DESKTOP_C}`, desktops)).toBe("Work, Music");
+  });
+
+  it("keeps the order the sticky stored them in", () => {
+    expect(describeDesktops(`${DESKTOP_C},${DESKTOP_A}`, desktops)).toBe("Music, Work");
+  });
+
+  it("says so plainly when a sticky is on every desktop", () => {
+    expect(describeDesktops(ALL_DESKTOPS, desktops)).toBe("All desktops");
+  });
+
+  it("says nothing for an unassigned sticky", () => {
+    expect(describeDesktops("", desktops)).toBe("");
+  });
+
+  // A desktop the sticky remembers can be removed by the user at any time. The
+  // sticky still names it, and we would rather show something than a blank.
+  it("falls back to a short id for a desktop that no longer exists", () => {
+    expect(describeDesktops("{DEAD0000-0000-0000-0000-000000000000}", desktops)).toBe(
+      "DEAD0000",
+    );
+  });
+
+  it("mixes known and unknown desktops without dropping either", () => {
+    expect(
+      describeDesktops(`${DESKTOP_B},{DEAD0000-0000-0000-0000-000000000000}`, desktops),
+    ).toBe("Personal, DEAD0000");
+  });
+
+  // Before the desktop list arrives we cannot tell a real name from a missing
+  // one, and a row of hex would be worse than a blank that fills in a moment later.
+  it("says nothing while the desktop list has not loaded yet", () => {
+    expect(describeDesktops(DESKTOP_A, [])).toBe("");
   });
 });

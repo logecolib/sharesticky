@@ -6,9 +6,15 @@ import {
   getCurrentDesktopId,
   onDesktopChanged,
   placeAndFocusSticky,
+  listDesktops,
 } from "../lib/tauri-bridge";
-import type { Sticky } from "../lib/tauri-bridge";
-import { isOnDesktop, isStickyOnCurrentDesktop, navigationFor } from "../lib/desktop-visibility";
+import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
+import {
+  describeDesktops,
+  isOnDesktop,
+  isStickyOnCurrentDesktop,
+  navigationFor,
+} from "../lib/desktop-visibility";
 import { STICKY_UPDATED_EVENT, type StickyUpdatePayload } from "../lib/sticky-sync";
 import "../styles/manager.css";
 
@@ -37,11 +43,15 @@ function StickyCard({
   sticky,
   isOnCurrentDesktop,
   currentDesktopId,
+  desktops,
 }: {
   sticky: Sticky;
   isOnCurrentDesktop: boolean;
   currentDesktopId: string;
+  desktops: DesktopInfo[];
 }) {
+  const desktopNames = describeDesktops(sticky.desktop_id, desktops);
+
   const handleClick = async () => {
     const destination = navigationFor(sticky.desktop_id, currentDesktopId);
 
@@ -62,6 +72,7 @@ function StickyCard({
         <span className="card-date">{formatDate(sticky.updated_at)}</span>
       </div>
       <div className="card-preview">{extractPreviewText(sticky.content)}</div>
+      {desktopNames && <div className="card-desktops">{desktopNames}</div>}
     </div>
   );
 }
@@ -76,6 +87,7 @@ function ManagerWindow() {
   const applyRemoteUpdate = useStickiesStore((s) => s.applyRemoteUpdate);
   const [currentDesktopId, setCurrentDesktopId] = useState("");
   const [thisDesktopOnly, setThisDesktopOnly] = useState(true);
+  const [desktops, setDesktops] = useState<DesktopInfo[]>([]);
 
   useEffect(() => {
     if (!loaded) {
@@ -106,9 +118,17 @@ function ManagerWindow() {
       .then((id) => setCurrentDesktopId(id))
       .catch(() => {});
 
+    // Desktop names for the card footers. Re-read on every switch, since the
+    // user may have added, removed or renamed one in the meantime.
+    const refreshDesktops = () => {
+      listDesktops().then(setDesktops).catch(() => {});
+    };
+    refreshDesktops();
+
     let unlisten: (() => void) | undefined;
     onDesktopChanged((desktopId) => {
       setCurrentDesktopId(desktopId);
+      refreshDesktops();
     }).then((fn) => { unlisten = fn; });
 
     return () => { unlisten?.(); };
@@ -158,6 +178,7 @@ function ManagerWindow() {
                 sticky={sticky}
                 isOnCurrentDesktop={isStickyOnCurrentDesktop(sticky, currentDesktopId)}
                 currentDesktopId={currentDesktopId}
+                desktops={desktops}
               />
             ))}
           </div>

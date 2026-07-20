@@ -98,9 +98,20 @@ pub async fn place_and_focus_sticky(
     // that spends the input claim.
     let window = ensure_sticky_window(&app, &options)?;
 
+    // Show *before* moving. A window that has never been displayed is not
+    // registered with the virtual-desktop system at all - the OS reports
+    // 0x8002802B for it - so moving it first re-homes something the shell
+    // barely knows about, and the later activation has nothing to follow. This
+    // is what made the first click on a sticky fail while the second worked:
+    // by then the window already existed, shown, on the target desktop.
+    window.show().map_err(|e| e.to_string())?;
+
     #[cfg(target_os = "windows")]
     if let Some(target) = desktop_id.as_deref() {
         use crate::platform::virtual_desktops::{VirtualDesktops, WindowHandle};
+
+        // Let the shell finish registering the newly shown window.
+        std::thread::sleep(std::time::Duration::from_millis(120));
 
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
         let vds = app.state::<crate::platform::windows::VirtualDesktopService>();
@@ -108,15 +119,11 @@ pub async fn place_and_focus_sticky(
             .map_err(|e| e.to_string())?;
         log::info!("Moved {label} to desktop {target} before activating it");
 
-        // Give the shell a moment to finish re-homing the window. Whether this
-        // is required is unproven - it did not on its own make activation carry
-        // the user across, see the open question on #11.
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        // And to finish re-homing it before we ask to be taken there.
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     #[cfg(not(target_os = "windows"))]
     let _ = desktop_id;
-
-    window.show().map_err(|e| e.to_string())?;
 
     // Activating is what carries the user to the window's desktop. Go straight
     // to SetForegroundWindow rather than through set_focus, so the return value

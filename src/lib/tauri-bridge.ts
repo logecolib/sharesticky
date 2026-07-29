@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import Database from "@tauri-apps/plugin-sql";
 import { availableMonitors } from "@tauri-apps/api/window";
 
 export interface Sticky {
@@ -21,74 +20,22 @@ export interface Sticky {
   updated_at: number;
 }
 
-let dbInstance: Database | null = null;
-
-async function getDb(): Promise<Database> {
-  if (!dbInstance) {
-    dbInstance = await Database.load("sqlite:sharesticky.db");
-  }
-  return dbInstance;
-}
+// SQLite now lives in Rust (SQLCipher-encrypted); the webview reaches it only
+// through these commands. Signatures are unchanged from the old direct-SQL
+// bridge, so the store and its callers are untouched. Column whitelisting,
+// id/timestamp generation, and the updated_at-stamping rule all moved into Rust.
 
 export async function getAllStickies(): Promise<Sticky[]> {
-  const db = await getDb();
-  return db.select<Sticky[]>("SELECT * FROM stickies ORDER BY updated_at DESC");
+  return invoke<Sticky[]>("list_stickies");
 }
 
 export async function createSticky(color: string = "#fff9c4"): Promise<Sticky> {
-  const db = await getDb();
-  const id = crypto.randomUUID();
-  const docId = crypto.randomUUID();
-  const now = Date.now();
-
-  await db.execute(
-    `INSERT INTO stickies (id, doc_id, content, color, desktop_id, position_x, position_y, width, height, pinned, is_open, sharing_tier, share_key, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-    // A newly created sticky opens immediately, so it starts out on screen.
-    [id, docId, "{}", color, "", 100 + Math.random() * 200, 100 + Math.random() * 200, 250, 200, 0, 1, 0, "", now, now]
-  );
-
-  const rows = await db.select<Sticky[]>("SELECT * FROM stickies WHERE id = $1", [id]);
-  return rows[0];
-}
-
-async function writeSticky(
-  id: string,
-  data: Partial<Sticky>,
-  { stampUpdatedAt }: { stampUpdatedAt: boolean },
-): Promise<void> {
-  const db = await getDb();
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  let paramIdx = 1;
-
-  for (const [key, value] of Object.entries(data)) {
-    // Letting the primary key through would renumber the parameters and
-    // update a different row.
-    if (key === "id") continue;
-    fields.push(`${key} = $${paramIdx}`);
-    values.push(value);
-    paramIdx++;
-  }
-
-  if (fields.length === 0) return;
-
-  if (stampUpdatedAt) {
-    fields.push(`updated_at = $${paramIdx}`);
-    values.push(Date.now());
-    paramIdx++;
-  }
-
-  values.push(id);
-  await db.execute(
-    `UPDATE stickies SET ${fields.join(", ")} WHERE id = $${paramIdx}`,
-    values
-  );
+  return invoke<Sticky>("create_sticky", { color });
 }
 
 /** Record an edit: content, colour, desktop assignment. Stamps `updated_at`. */
 export async function updateSticky(id: string, data: Partial<Sticky>): Promise<void> {
-  return writeSticky(id, data, { stampUpdatedAt: true });
+  return invoke("update_sticky", { id, patch: data });
 }
 
 /**
@@ -102,12 +49,11 @@ export async function updateStickyWindowState(
   id: string,
   data: Partial<Pick<Sticky, "position_x" | "position_y" | "width" | "height" | "is_open">>,
 ): Promise<void> {
-  return writeSticky(id, data, { stampUpdatedAt: false });
+  return invoke("update_sticky_window_state", { id, patch: data });
 }
 
 export async function deleteSticky(id: string): Promise<void> {
-  const db = await getDb();
-  await db.execute("DELETE FROM stickies WHERE id = $1", [id]);
+  return invoke("delete_sticky", { id });
 }
 
 export async function openStickyWindow(sticky: Sticky): Promise<void> {

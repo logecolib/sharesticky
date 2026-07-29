@@ -14,9 +14,6 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
-    "sql:default",
-    "sql:allow-select",
-    "sql:allow-execute",
     "core:menu:default"
   ]
 }

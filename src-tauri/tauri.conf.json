@@ -35,9 +35,5 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {
-    "sql": {
-      "preload": ["sqlite:sharesticky.db"]
-    }
-  }
+  "plugins": {}
 }

@@ -15,28 +15,31 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_sql::Builder::new()
-                .add_migrations(
-                    "sqlite:sharesticky.db",
-                    vec![
-                        tauri_plugin_sql::Migration {
-                            version: 1,
-                            description: "create stickies table",
-                            sql: storage::database::MIGRATION_V1,
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                        tauri_plugin_sql::Migration {
-                            version: 2,
-                            description: "remember which stickies are open",
-                            sql: storage::database::MIGRATION_V2,
-                            kind: tauri_plugin_sql::MigrationKind::Up,
-                        },
-                    ],
-                )
-                .build(),
-        )
         .setup(|app| {
+            // Open the encrypted database before anything else touches storage.
+            // Rust now owns SQLite (SQLCipher); the key lives in the OS keychain
+            // for silent unlock. A missing key on first run is generated; an
+            // existing plaintext db from the old tauri-plugin-sql era is imported.
+            {
+                use storage::vault::{ensure_data_key, KeychainStore, KeyStore};
+
+                let data_dir = app.path().app_data_dir()?;
+                std::fs::create_dir_all(&data_dir)?;
+                let db_path = data_dir.join("sharesticky.db");
+
+                let keystore = KeychainStore::new("com.sharesticky.app", "db-key");
+                let key_existed = keystore
+                    .get()
+                    .map_err(|e| format!("keychain read failed: {e}"))?
+                    .is_some();
+                let key = ensure_data_key(&keystore)
+                    .map_err(|e| format!("could not obtain db key: {e}"))?;
+                let conn = storage::migrate::run(&db_path, &key, key_existed)
+                    .map_err(|e| format!("database open/migrate failed: {e}"))?;
+                app.manage(storage::repo::SqliteRepo::new(conn));
+                log::info!("Encrypted database ready at {}", db_path.display());
+            }
+
             // Build tray menu
             let new_sticky = MenuItemBuilder::with_id("new_sticky", "New Sticky").build(app)?;
             let show_manager =
@@ -116,6 +119,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::storage::list_stickies,
+            commands::storage::create_sticky,
+            commands::storage::update_sticky,
+            commands::storage::update_sticky_window_state,
+            commands::storage::delete_sticky,
             commands::sticky::open_sticky_window,
             commands::sticky::close_sticky_window,
             commands::sticky::place_and_focus_sticky,

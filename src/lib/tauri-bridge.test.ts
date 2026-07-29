@@ -1,138 +1,74 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Database.load is stubbed rather than mocking SQLite: what is worth checking
-// is the statement and parameters this builds, not that SQLite works.
-const execute = vi.fn(() => Promise.resolve());
-const select = vi.fn(() => Promise.resolve([]));
+// The bridge is now a thin invoke() layer over Rust commands. What's worth
+// checking here is the command name and argument shape; the SQL behaviour it
+// used to build (column whitelist, updated_at stamping, zero/empty handling)
+// moved into Rust and is tested there (src-tauri storage::repo).
+// vi.mock is hoisted above the file, so the mock fn must be hoisted too.
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-vi.mock("@tauri-apps/plugin-sql", () => ({
-  default: { load: vi.fn(() => Promise.resolve({ execute, select })) },
-}));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+import {
+  createSticky,
+  deleteSticky,
+  getAllStickies,
+  updateSticky,
+  updateStickyWindowState,
+} from "./tauri-bridge";
 
-import { deleteSticky, updateSticky, updateStickyWindowState } from "./tauri-bridge";
+beforeEach(() => invoke.mockClear());
 
-beforeEach(() => {
-  execute.mockClear();
-  select.mockClear();
-});
-
-/** The SQL and bound values from the most recent execute call. */
-function lastStatement(): { sql: string; values: unknown[] } {
-  const calls = execute.mock.calls;
-  const [sql, values] = calls[calls.length - 1] as unknown as [string, unknown[]];
-  return { sql, values };
+function lastCall(): [string, unknown] {
+  const calls = invoke.mock.calls;
+  return calls[calls.length - 1] as unknown as [string, unknown];
 }
 
+describe("getAllStickies", () => {
+  it("calls the list command", async () => {
+    await getAllStickies();
+    expect(lastCall()[0]).toBe("list_stickies");
+  });
+});
+
+describe("createSticky", () => {
+  it("passes the colour to the create command", async () => {
+    await createSticky("#c8e6c9");
+    expect(lastCall()).toEqual(["create_sticky", { color: "#c8e6c9" }]);
+  });
+
+  it("defaults the colour when none is given", async () => {
+    await createSticky();
+    const [cmd, args] = lastCall();
+    expect(cmd).toBe("create_sticky");
+    expect((args as { color: string }).color).toBeTruthy();
+  });
+});
+
 describe("updateSticky", () => {
-  it("updates only the field it was given", async () => {
-    await updateSticky("abc", { color: "#c8e6c9" });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("color = $1");
-    expect(values[0]).toBe("#c8e6c9");
+  it("sends the edit as a patch under the sticky id", async () => {
+    await updateSticky("abc", { color: "#fff", content: "hi" });
+    expect(lastCall()).toEqual([
+      "update_sticky",
+      { id: "abc", patch: { color: "#fff", content: "hi" } },
+    ]);
   });
+});
 
-  it("numbers its parameters in order across several fields", async () => {
-    await updateSticky("abc", { position_x: 10, position_y: 20 });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("position_x = $1");
-    expect(sql).toContain("position_y = $2");
-    expect(values[0]).toBe(10);
-    expect(values[1]).toBe(20);
-  });
-
-  // Every write bumps updated_at, which is what the manager sorts by.
-  it("stamps updated_at without being asked", async () => {
-    await updateSticky("abc", { color: "#fff" });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("updated_at = $2");
-    expect(typeof values[1]).toBe("number");
-  });
-
-  it("matches on the sticky's id as the final parameter", async () => {
-    await updateSticky("abc", { color: "#fff" });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("WHERE id = $3");
-    expect(values[values.length - 1]).toBe("abc");
-  });
-
-  // Letting id through would renumber the parameters and update the wrong row.
-  it("refuses to overwrite the primary key even if handed one", async () => {
-    await updateSticky("abc", { id: "somebody-else", color: "#fff" } as never);
-
-    const { sql, values } = lastStatement();
-    expect(sql).not.toContain("id = $1");
-    expect(values[values.length - 1]).toBe("abc");
-  });
-
-  it("does nothing at all when given no fields", async () => {
-    await updateSticky("abc", {});
-
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("writes a zero rather than treating it as absent", async () => {
-    await updateSticky("abc", { pinned: 0 });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("pinned = $1");
-    expect(values[0]).toBe(0);
-  });
-
-  it("writes an empty string rather than treating it as absent", async () => {
-    await updateSticky("abc", { desktop_id: "" });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("desktop_id = $1");
-    expect(values[0]).toBe("");
+describe("updateStickyWindowState", () => {
+  // A distinct command so Rust knows not to stamp updated_at (which would
+  // reorder the manager on open/drag).
+  it("uses the window-state command, not the edit command", async () => {
+    await updateStickyWindowState("abc", { position_x: 5, is_open: 1 });
+    expect(lastCall()).toEqual([
+      "update_sticky_window_state",
+      { id: "abc", patch: { position_x: 5, is_open: 1 } },
+    ]);
   });
 });
 
 describe("deleteSticky", () => {
-  it("deletes only the sticky it names", async () => {
+  it("names the sticky to delete", async () => {
     await deleteSticky("abc");
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("DELETE FROM stickies");
-    expect(sql).toContain("WHERE id = $1");
-    expect(values).toEqual(["abc"]);
-  });
-});
-
-// Window state - position, size, openness - is not an edit. The manager sorts
-// by updated_at, so stamping it here would make opening or dragging a note jump
-// its card to the top of the list.
-describe("updateStickyWindowState", () => {
-  it("writes the field it was given", async () => {
-    await updateStickyWindowState("abc", { is_open: 1 });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("is_open = $1");
-    expect(values[0]).toBe(1);
-  });
-
-  it("does not stamp updated_at", async () => {
-    await updateStickyWindowState("abc", { is_open: 1 });
-
-    const { sql } = lastStatement();
-    expect(sql).not.toContain("updated_at");
-  });
-
-  it("matches on the sticky's id straight after the fields", async () => {
-    await updateStickyWindowState("abc", { position_x: 5, position_y: 6 });
-
-    const { sql, values } = lastStatement();
-    expect(sql).toContain("WHERE id = $3");
-    expect(values[values.length - 1]).toBe("abc");
-  });
-
-  it("does nothing when given no fields", async () => {
-    await updateStickyWindowState("abc", {});
-
-    expect(execute).not.toHaveBeenCalled();
+    expect(lastCall()).toEqual(["delete_sticky", { id: "abc" }]);
   });
 });

@@ -1,0 +1,30 @@
+# Standalone P2P transport sidecar. A SEPARATE crate with its own Cargo.lock on
+# purpose: linking iroh into the Tauri app fails on Windows (iroh's non-optional
+# wmi dep collides with tauri's pinned windows 0.61.3). Kept out of any parent
+# workspace by the empty [workspace] table below so its dependency graph is fully
+# independent. See memory: project_iroh_sidecar.
+[workspace]
+
+[package]
+name = "sharesticky-net"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sharesticky-net"
+path = "src/main.rs"
+
+[dependencies]
+# QUIC transport dialed by Ed25519 public key; presets::N0 adds relays + DNS
+# discovery so a bare peer id resolves across NATs. rustls/ring - no OpenSSL.
+iroh = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+anyhow = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

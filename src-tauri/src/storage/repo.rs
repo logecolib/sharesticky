@@ -86,6 +86,14 @@ pub trait StickyRepo: Send + Sync {
     fn create(&self, sticky: &Sticky) -> Result<(), RepoError>;
     fn update(&self, id: &str, patch: &StickyPatch, stamp_updated_at: bool) -> Result<(), RepoError>;
     fn delete(&self, id: &str) -> Result<(), RepoError>;
+
+    /// The note's Yjs document bytes (`yjs_state`), or `None` if it has none yet
+    /// (a note that predates the CRDT migration, or was never edited).
+    fn get_doc(&self, id: &str) -> Result<Option<Vec<u8>>, RepoError>;
+
+    /// Persist the Yjs document and its derived `content` projection together,
+    /// stamping `updated_at` (so the manager re-sorts). One write, kept atomic.
+    fn save_doc(&self, id: &str, bytes: &[u8], content: &str) -> Result<(), RepoError>;
 }
 
 /// Build the `SET` clause and params for an update from the `Some` fields of a
@@ -221,6 +229,30 @@ impl StickyRepo for SqliteRepo {
         conn.execute("DELETE FROM stickies WHERE id = ?", [id])?;
         Ok(())
     }
+
+    fn get_doc(&self, id: &str) -> Result<Option<Vec<u8>>, RepoError> {
+        let conn = self.lock();
+        let row = conn.query_row(
+            "SELECT yjs_state FROM stickies WHERE id = ?",
+            [id],
+            |r| r.get::<_, Option<Vec<u8>>>(0),
+        );
+        match row {
+            Ok(bytes) => Ok(bytes),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn save_doc(&self, id: &str, bytes: &[u8], content: &str) -> Result<(), RepoError> {
+        let now = crate::storage::now_millis();
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE stickies SET yjs_state = ?, content = ?, updated_at = ? WHERE id = ?",
+            rusqlite::params![bytes, content, now, id],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -317,6 +349,33 @@ mod tests {
         repo.delete("a").unwrap();
         let ids: Vec<String> = repo.list().unwrap().into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["b"]);
+    }
+
+    #[test]
+    fn save_doc_round_trips_bytes_and_projection() {
+        let repo = keyed_repo();
+        repo.create(&sticky("a")).unwrap();
+
+        let bytes = vec![1u8, 2, 3, 4, 5];
+        repo.save_doc("a", &bytes, "{\"type\":\"doc\"}").unwrap();
+
+        assert_eq!(repo.get_doc("a").unwrap(), Some(bytes));
+        let got = &repo.list().unwrap()[0];
+        assert_eq!(got.content, "{\"type\":\"doc\"}");
+        assert!(got.updated_at > 1000, "save_doc should stamp updated_at");
+    }
+
+    #[test]
+    fn get_doc_is_none_for_a_note_without_one() {
+        let repo = keyed_repo();
+        repo.create(&sticky("a")).unwrap(); // yjs_state left NULL
+        assert_eq!(repo.get_doc("a").unwrap(), None);
+    }
+
+    #[test]
+    fn get_doc_is_none_for_a_missing_sticky() {
+        let repo = keyed_repo();
+        assert_eq!(repo.get_doc("ghost").unwrap(), None);
     }
 
     #[test]

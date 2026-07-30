@@ -1,51 +1,23 @@
-import { useEffect } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import TaskList from '@tiptap/extension-task-list';
-import TaskItem from '@tiptap/extension-task-item';
-import Placeholder from '@tiptap/extension-placeholder';
-import { useStickiesStore } from '../store/stickies';
+import { useEditor, EditorContent } from "@tiptap/react";
+import Collaboration from "@tiptap/extension-collaboration";
+import type * as Y from "yjs";
+import { editorExtensions } from "./editor-extensions";
 
 interface StickyEditorProps {
-  stickyId: string;
-  initialContent: string;
+  /** The note's Yjs document — the source of truth for its content. */
+  doc: Y.Doc;
 }
 
-function StickyEditor({ stickyId, initialContent }: StickyEditorProps) {
-  const updateStickyContent = useStickiesStore((s) => s.updateStickyContent);
-
-  const editor = useEditor({
-    extensions: [
-      StarterKit,
-      TaskList,
-      TaskItem.configure({
-        nested: true,
-      }),
-      Placeholder.configure({
-        placeholder: 'Write something...',
-      }),
-    ],
-    content: initialContent ? JSON.parse(initialContent) : undefined,
-    onUpdate: ({ editor }) => {
-      const json = JSON.stringify(editor.getJSON());
-      updateStickyContent(stickyId, json);
+function StickyEditor({ doc }: StickyEditorProps) {
+  // Content comes from the Y.Doc (via Collaboration), not a prop. StarterKit's
+  // history is off in editorExtensions so Yjs owns undo/redo. Persistence and
+  // the preview projection are handled by StickyWindow, which owns the doc.
+  const editor = useEditor(
+    {
+      extensions: [...editorExtensions, Collaboration.configure({ document: doc })],
     },
-  });
-
-  // Update editor content if it changes externally
-  useEffect(() => {
-    if (editor && initialContent) {
-      try {
-        const parsed = JSON.parse(initialContent);
-        const currentJson = JSON.stringify(editor.getJSON());
-        if (currentJson !== initialContent) {
-          // Only update if content actually differs to avoid cursor jumps
-        }
-      } catch {
-        // Invalid JSON, ignore
-      }
-    }
-  }, [editor, initialContent]);
+    [doc],
+  );
 
   return (
     <div className="sticky-editor">

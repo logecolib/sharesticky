@@ -124,6 +124,8 @@ pub fn run() {
             commands::storage::update_sticky,
             commands::storage::update_sticky_window_state,
             commands::storage::delete_sticky,
+            commands::storage::get_sticky_doc,
+            commands::storage::save_sticky_doc,
             commands::sticky::open_sticky_window,
             commands::sticky::close_sticky_window,
             commands::sticky::place_and_focus_sticky,

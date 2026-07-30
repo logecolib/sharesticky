@@ -26,6 +26,10 @@ keyring = { version = "3", features = ["windows-native"] }
 rand = "0.8"
 zeroize = "1"
 hex = "0.4"
+base64 = "0.22"
+# iroh cannot be linked in-process: its (non-optional) wmi dependency collides
+# with tauri's pinned windows 0.61.3 (see memory: project_iroh_sidecar). It runs
+# as the standalone `net-sidecar` binary; the app speaks NDJSON to it over stdio.
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

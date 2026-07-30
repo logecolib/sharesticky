@@ -9,6 +9,7 @@
 // unit tested anywhere; the windows-crate types stay in the adapter below.
 pub mod availability;
 pub mod desktop_id;
+pub mod iroh_sidecar;
 pub mod placement;
 pub mod transport;
 pub mod virtual_desktops;

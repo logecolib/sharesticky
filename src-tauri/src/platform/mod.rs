@@ -10,6 +10,7 @@
 pub mod availability;
 pub mod desktop_id;
 pub mod placement;
+pub mod transport;
 pub mod virtual_desktops;
 
 // Diagnostic only: an #[ignore]d probe asking whether the OS virtual-desktop

@@ -9,6 +9,7 @@ import StickyToolbar from "./StickyToolbar";
 import { useStickiesStore } from "../store/stickies";
 import { parseDesktopIds } from "../lib/desktop-visibility";
 import { debounce, STICKY_UPDATED_EVENT } from "../lib/sticky-sync";
+import { SyncEngine } from "../lib/sync-protocol";
 import {
   docFromBytes,
   encodeDoc,
@@ -21,6 +22,8 @@ import {
   getCurrentDesktopId,
   getStickyDoc,
   saveStickyDoc,
+  sendSyncFrame,
+  onSyncFrame,
 } from "../lib/tauri-bridge";
 import type { Sticky } from "../lib/tauri-bridge";
 import "../styles/sticky.css";
@@ -95,6 +98,47 @@ function StickyWindow({ label }: StickyWindowProps) {
       saveStickyDoc(stickyId, encodeDoc(ydoc), projectToContent(ydoc)).catch(() => {});
     };
   }, [ydoc, stickyId]);
+
+  // Live sharing: while this note is shared, sync its Yjs doc with connected
+  // peers. The engine sends local edits out and applies inbound frames; the
+  // persistence effect above then saves whatever it merges and updates the
+  // manager preview, so remote edits are stored and shown like local ones.
+  useEffect(() => {
+    if (!ydoc || !sticky || sticky.sharing_tier < 1) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const engine = new SyncEngine(ydoc, (frame) => {
+      sendSyncFrame(stickyId, frame).catch((e) => console.error("sendSyncFrame:", e));
+    });
+    onSyncFrame(({ noteId, frame }) => {
+      if (noteId === stickyId) engine.receive(frame);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    // Bootstrap the handshake across the connect race: a peer session may not
+    // exist yet when we first announce (dial is async), and both sides must send
+    // step-1 for a full two-way catch-up. Re-announcing a few times covers that;
+    // repeat step-1s are idempotent, and live updates carry edits afterwards.
+    engine.start();
+    let ticks = 0;
+    const bootstrap = setInterval(() => {
+      if (cancelled || ticks >= 10) {
+        clearInterval(bootstrap);
+        return;
+      }
+      ticks += 1;
+      engine.start();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(bootstrap);
+      unlisten?.();
+      engine.destroy();
+    };
+  }, [ydoc, sticky?.sharing_tier, stickyId]);
 
   // Destroy the doc when the window goes away.
   useEffect(() => () => ydoc?.destroy(), [ydoc]);

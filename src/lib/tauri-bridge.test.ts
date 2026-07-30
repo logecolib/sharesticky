@@ -9,11 +9,15 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn(() => Promise.resolve()) })
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import {
+  acceptSharedSticky,
   createSticky,
   deleteSticky,
   getAllStickies,
   getStickyDoc,
   saveStickyDoc,
+  sendSyncFrame,
+  sharingDial,
+  sharingEndpointId,
   updateSticky,
   updateStickyWindowState,
 } from "./tauri-bridge";
@@ -91,5 +95,27 @@ describe("saveStickyDoc", () => {
       "save_sticky_doc",
       { id: "abc", bytes: [9, 8, 7], content: '{"type":"doc"}' },
     ]);
+  });
+});
+
+describe("sharing", () => {
+  it("asks for our endpoint id", async () => {
+    await sharingEndpointId();
+    expect(lastCall()[0]).toBe("sharing_endpoint_id");
+  });
+
+  it("dials a peer by id", async () => {
+    await sharingDial("PEER");
+    expect(lastCall()).toEqual(["sharing_dial", { peerId: "PEER" }]);
+  });
+
+  it("sends a sync frame as a number array under its note id", async () => {
+    await sendSyncFrame("note1", new Uint8Array([1, 2, 3]));
+    expect(lastCall()).toEqual(["send_sync_frame", { noteId: "note1", frame: [1, 2, 3] }]);
+  });
+
+  it("accepts a shared note by id", async () => {
+    await acceptSharedSticky("note1");
+    expect(lastCall()).toEqual(["accept_shared_sticky", { id: "note1" }]);
   });
 });

@@ -28,8 +28,6 @@ impl fmt::Display for PeerId {
 pub enum TransportError {
     /// No live session to this peer - dial first, or it has dropped.
     NotConnected(String),
-    /// The peer id was not a valid address.
-    BadPeer(String),
     /// A received frame was not a well-formed envelope.
     MalformedFrame(String),
     /// The transport itself is unusable (e.g. it failed to bind a socket).
@@ -40,7 +38,6 @@ impl fmt::Display for TransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotConnected(s) => write!(f, "no live session to peer: {s}"),
-            Self::BadPeer(s) => write!(f, "bad peer address: {s}"),
             Self::MalformedFrame(s) => write!(f, "malformed frame: {s}"),
             Self::Unavailable(s) => write!(f, "transport unavailable: {s}"),
         }

@@ -12,6 +12,8 @@ import {
   createSticky,
   deleteSticky,
   getAllStickies,
+  getStickyDoc,
+  saveStickyDoc,
   updateSticky,
   updateStickyWindowState,
 } from "./tauri-bridge";
@@ -70,5 +72,24 @@ describe("deleteSticky", () => {
   it("names the sticky to delete", async () => {
     await deleteSticky("abc");
     expect(lastCall()).toEqual(["delete_sticky", { id: "abc" }]);
+  });
+});
+
+describe("getStickyDoc", () => {
+  it("returns the note's Yjs bytes as a Uint8Array", async () => {
+    invoke.mockResolvedValueOnce([1, 2, 3] as never);
+    const bytes = await getStickyDoc("abc");
+    expect(lastCall()).toEqual(["get_sticky_doc", { id: "abc" }]);
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+  });
+});
+
+describe("saveStickyDoc", () => {
+  it("sends the doc bytes (as a number array) and the content projection", async () => {
+    await saveStickyDoc("abc", new Uint8Array([9, 8, 7]), '{"type":"doc"}');
+    expect(lastCall()).toEqual([
+      "save_sticky_doc",
+      { id: "abc", bytes: [9, 8, 7], content: '{"type":"doc"}' },
+    ]);
   });
 });

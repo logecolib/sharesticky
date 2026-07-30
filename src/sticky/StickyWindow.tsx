@@ -1,17 +1,26 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as Y from "yjs";
 import StickyDragHandle from "./StickyDragHandle";
 import StickyEditor from "./StickyEditor";
 import StickyToolbar from "./StickyToolbar";
 import { useStickiesStore } from "../store/stickies";
 import { parseDesktopIds } from "../lib/desktop-visibility";
-import { debounce } from "../lib/sticky-sync";
+import { debounce, STICKY_UPDATED_EVENT } from "../lib/sticky-sync";
+import {
+  docFromBytes,
+  encodeDoc,
+  projectToContent,
+  seedDocFromContent,
+} from "../lib/sticky-doc";
 import {
   moveStickyToDesktop,
   setStickyDesktops,
   getCurrentDesktopId,
+  getStickyDoc,
+  saveStickyDoc,
 } from "../lib/tauri-bridge";
 import type { Sticky } from "../lib/tauri-bridge";
 import "../styles/sticky.css";
@@ -27,10 +36,68 @@ function StickyWindow({ label }: StickyWindowProps) {
   const getSticky = useStickiesStore((s) => s.getSticky);
   const updateStickyMeta = useStickiesStore((s) => s.updateStickyMeta);
   const [sticky, setSticky] = useState<Sticky | undefined>();
+  const [ydoc, setYdoc] = useState<Y.Doc | null>(null);
 
   useEffect(() => {
     if (!loaded) loadStickies();
   }, [loaded, loadStickies]);
+
+  // Load (or lazily create) this note's Yjs document. Runs once: guarded by
+  // `ydoc` so store updates to `sticky` (colour, desktop) don't rebuild it.
+  useEffect(() => {
+    if (!sticky || ydoc) return;
+    let cancelled = false;
+    (async () => {
+      const bytes = await getStickyDoc(stickyId).catch(() => new Uint8Array());
+      if (cancelled) return;
+      let doc: Y.Doc;
+      if (bytes.length > 0) {
+        doc = docFromBytes(bytes);
+      } else {
+        // First time for this note: migrate its stored TipTap JSON into a doc
+        // and persist immediately, so `yjs_state` becomes the source of truth.
+        doc = seedDocFromContent(sticky.content);
+        await saveStickyDoc(stickyId, encodeDoc(doc), projectToContent(doc)).catch((e) =>
+          console.error("seed sticky doc:", e),
+        );
+      }
+      if (cancelled) {
+        doc.destroy();
+        return;
+      }
+      setYdoc(doc);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sticky, stickyId, ydoc]);
+
+  // Persist edits (debounced) and announce the derived preview to the manager.
+  useEffect(() => {
+    if (!ydoc) return;
+    const save = debounce(() => {
+      const content = projectToContent(ydoc);
+      saveStickyDoc(stickyId, encodeDoc(ydoc), content).catch((e) =>
+        console.error("save sticky doc:", e),
+      );
+      // The manager updates its preview + re-sorts off this event (unchanged bus).
+      emit(STICKY_UPDATED_EVENT, {
+        id: stickyId,
+        changes: { content, updated_at: Date.now() },
+      }).catch(() => {});
+    }, 400);
+
+    ydoc.on("update", save);
+    return () => {
+      ydoc.off("update", save);
+      save.cancel();
+      // Best-effort flush of the final state on unmount/close.
+      saveStickyDoc(stickyId, encodeDoc(ydoc), projectToContent(ydoc)).catch(() => {});
+    };
+  }, [ydoc, stickyId]);
+
+  // Destroy the doc when the window goes away.
+  useEffect(() => () => ydoc?.destroy(), [ydoc]);
 
   useEffect(() => {
     if (loaded) setSticky(getSticky(stickyId));
@@ -176,9 +243,9 @@ function StickyWindow({ label }: StickyWindowProps) {
     await getCurrentWindow().close();
   }, [stickyId]);
 
-  if (!sticky) {
+  if (!sticky || !ydoc) {
     return (
-      <div className="sticky-window" style={{ backgroundColor: "#fff9c4" }}>
+      <div className="sticky-window" style={{ backgroundColor: sticky?.color ?? "#fff9c4" }}>
         <StickyDragHandle />
         <div className="sticky-editor" style={{ padding: 12, opacity: 0.5 }}>Loading...</div>
       </div>
@@ -188,7 +255,7 @@ function StickyWindow({ label }: StickyWindowProps) {
   return (
     <div className="sticky-window" style={{ backgroundColor: sticky.color }} onContextMenu={handleContextMenu}>
       <StickyDragHandle onClose={handleClose} />
-      <StickyEditor stickyId={stickyId} initialContent={sticky.content} />
+      <StickyEditor doc={ydoc} />
       <StickyToolbar stickyId={stickyId} currentColor={sticky.color} pinned={sticky.pinned} />
     </div>
   );

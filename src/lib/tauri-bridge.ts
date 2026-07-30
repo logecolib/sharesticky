@@ -56,6 +56,21 @@ export async function deleteSticky(id: string): Promise<void> {
   return invoke("delete_sticky", { id });
 }
 
+/** A note's Yjs document bytes; empty array means it has none yet (seed it). */
+export async function getStickyDoc(id: string): Promise<Uint8Array> {
+  const bytes = await invoke<number[]>("get_sticky_doc", { id });
+  return new Uint8Array(bytes);
+}
+
+/** Persist a note's Yjs document plus its derived `content` projection. */
+export async function saveStickyDoc(
+  id: string,
+  bytes: Uint8Array,
+  content: string,
+): Promise<void> {
+  return invoke("save_sticky_doc", { id, bytes: Array.from(bytes), content });
+}
+
 export async function openStickyWindow(sticky: Sticky): Promise<void> {
   await invoke("open_sticky_window", {
     options: {

@@ -20,14 +20,30 @@ pub fn run() {
             // Rust now owns SQLite (SQLCipher); the key lives in the OS keychain
             // for silent unlock. A missing key on first run is generated; an
             // existing plaintext db from the old tauri-plugin-sql era is imported.
+            // A dev-only second instance (SHARESTICKY_INSTANCE=<name>) gets its
+            // own data dir and keychain entries, so two peers can run on one
+            // machine to test sharing. Unset in production - behaviour unchanged.
+            let instance = std::env::var("SHARESTICKY_INSTANCE").ok();
+            let suffix = |base: &str| match &instance {
+                Some(s) => format!("{base}-{s}"),
+                None => base.to_string(),
+            };
+
             {
                 use storage::vault::{ensure_data_key, KeychainStore, KeyStore};
 
-                let data_dir = app.path().app_data_dir()?;
+                let base_dir = app.path().app_data_dir()?;
+                let data_dir = match &instance {
+                    Some(s) => base_dir.with_file_name(format!(
+                        "{}-{s}",
+                        base_dir.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                    None => base_dir,
+                };
                 std::fs::create_dir_all(&data_dir)?;
                 let db_path = data_dir.join("sharesticky.db");
 
-                let keystore = KeychainStore::new("com.sharesticky.app", "db-key");
+                let keystore = KeychainStore::new("com.sharesticky.app", &suffix("db-key"));
                 let key_existed = keystore
                     .get()
                     .map_err(|e| format!("keychain read failed: {e}"))?
@@ -38,6 +54,55 @@ pub fn run() {
                     .map_err(|e| format!("database open/migrate failed: {e}"))?;
                 app.manage(storage::repo::SqliteRepo::new(conn));
                 log::info!("Encrypted database ready at {}", db_path.display());
+            }
+
+            // Sharing transport: spawn the net-sidecar under our own identity and
+            // route its inbound frames to the webview. iroh runs out-of-process
+            // (see memory: project_iroh_sidecar); if it cannot start, sharing
+            // degrades to a no-op and the rest of the app is unaffected.
+            {
+                use commands::sharing::{NoopTransport, Sharing};
+                use platform::iroh_sidecar::IrohSidecarTransport;
+                use platform::transport::{decode_envelope, InboundSink, PeerId, Transport};
+                use std::collections::HashSet;
+                use std::sync::{Arc, Mutex};
+                use storage::vault::{ensure_data_key, KeychainStore};
+
+                let id_store = KeychainStore::new("com.sharesticky.app", &suffix("iroh-identity"));
+                let seed = ensure_data_key(&id_store)
+                    .map_err(|e| format!("could not obtain identity key: {e}"))?;
+
+                // Shared with the inbound sink so a peer that dials us is learned
+                // and our replies flow back to it.
+                let peers: Arc<Mutex<HashSet<PeerId>>> = Arc::new(Mutex::new(HashSet::new()));
+
+                let app_handle = app.handle().clone();
+                let sink_peers = peers.clone();
+                let sink: InboundSink = Arc::new(move |(peer, bytes)| {
+                    sink_peers.lock().unwrap().insert(peer.clone());
+                    match decode_envelope(&bytes) {
+                        Ok((note_id, frame)) => {
+                            let _ = app_handle.emit(
+                                "sync-frame",
+                                serde_json::json!({ "note_id": note_id, "frame": frame }),
+                            );
+                        }
+                        Err(e) => log::warn!("dropping malformed frame from {peer}: {e}"),
+                    }
+                });
+
+                let transport: Arc<dyn Transport> =
+                    match IrohSidecarTransport::spawn(&sidecar_path(), &seed, sink) {
+                        Ok(t) => {
+                            log::info!("Sharing ready; endpoint id {}", t.endpoint_id());
+                            Arc::new(t)
+                        }
+                        Err(e) => {
+                            log::warn!("Sharing disabled: {e}");
+                            Arc::new(NoopTransport)
+                        }
+                    };
+                app.manage(Sharing::new(transport, peers));
             }
 
             // Build tray menu
@@ -135,9 +200,25 @@ pub fn run() {
             commands::desktop::move_sticky_to_desktop,
             commands::desktop::set_sticky_desktops,
             commands::desktop::show_desktop_menu,
+            commands::sharing::sharing_endpoint_id,
+            commands::sharing::sharing_dial,
+            commands::sharing::send_sync_frame,
+            commands::sharing::accept_shared_sticky,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShareSticky");
+}
+
+/// Where the P2P transport sidecar binary lives.
+///
+/// `SHARESTICKY_SIDECAR` overrides it (used in packaged builds and tests);
+/// otherwise fall back to the dev build next to the app crate.
+fn sidecar_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("SHARESTICKY_SIDECAR") {
+        return std::path::PathBuf::from(p);
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../net-sidecar/target/debug/sharesticky-net.exe")
 }
 
 /// Initialize the Windows virtual desktop service and spawn a background

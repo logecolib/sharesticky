@@ -203,3 +203,22 @@
   background-color: rgba(0, 0, 0, 0.1);
   margin: 0 2px;
 }
+/* Sharing: the code shown after clicking Share, and the offline hint. */
+.sticky-toolbar .share-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  font-size: 10px;
+  font-family: ui-monospace, monospace;
+  padding: 2px 4px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.6);
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.sticky-toolbar .share-hint {
+  margin-left: 4px;
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.5);
+}

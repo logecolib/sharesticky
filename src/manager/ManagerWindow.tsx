@@ -7,6 +7,10 @@ import {
   placeAndFocusSticky,
   listDesktops,
   attachedScreens,
+  sharingDial,
+  acceptSharedSticky,
+  openStickyWindow,
+  updateSticky,
 } from "../lib/tauri-bridge";
 import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
 import {
@@ -90,6 +94,7 @@ function ManagerWindow() {
   const [currentDesktopId, setCurrentDesktopId] = useState("");
   const [thisDesktopOnly, setThisDesktopOnly] = useState(true);
   const [desktops, setDesktops] = useState<DesktopInfo[]>([]);
+  const [shareInput, setShareInput] = useState("");
 
   useEffect(() => {
     if (!loaded) {
@@ -187,6 +192,37 @@ function ManagerWindow() {
     await createSticky(color);
   };
 
+  // Accept a shared note: paste "<endpoint id>:<note id>", dial the sharer, and
+  // materialise the note locally under the same id so both sync one document.
+  const handleAcceptShare = async () => {
+    const code = shareInput.trim();
+    const sep = code.indexOf(":");
+    if (sep <= 0) return;
+    const endpointId = code.slice(0, sep);
+    const noteId = code.slice(sep + 1);
+    try {
+      await sharingDial(endpointId);
+      const sticky = await acceptSharedSticky(noteId);
+      // Tag it with the current desktop, like a locally created note, so it
+      // shows under the "This desktop" filter instead of being hidden as an
+      // unassigned ("") note. Desktop assignment is local and does not sync.
+      try {
+        const desktopId = await getCurrentDesktopId();
+        if (desktopId) {
+          await updateSticky(noteId, { desktop_id: desktopId });
+          sticky.desktop_id = desktopId;
+        }
+      } catch {
+        // Desktop detection unavailable; the manager then shows all notes anyway.
+      }
+      await openStickyWindow(sticky);
+      await loadStickies();
+      setShareInput("");
+    } catch (e) {
+      console.error("accept share:", e);
+    }
+  };
+
   return (
     <div className="manager-window">
       <div className="manager-header">
@@ -207,6 +243,23 @@ function ManagerWindow() {
             + New Sticky
           </button>
         </div>
+      </div>
+
+      <div className="share-accept-bar">
+        <input
+          className="share-accept-input"
+          placeholder="Paste a share code to receive a note"
+          value={shareInput}
+          onChange={(e) => setShareInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAcceptShare()}
+        />
+        <button
+          className="accept-share-btn"
+          onClick={handleAcceptShare}
+          disabled={!shareInput.trim()}
+        >
+          Receive
+        </button>
       </div>
 
       <div className="manager-content">

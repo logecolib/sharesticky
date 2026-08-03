@@ -84,6 +84,10 @@ const COLUMNS: &str = "id, doc_id, content, color, desktop_id, position_x, \
 pub trait StickyRepo: Send + Sync {
     fn list(&self) -> Result<Vec<Sticky>, RepoError>;
     fn create(&self, sticky: &Sticky) -> Result<(), RepoError>;
+
+    /// One sticky by id, or `None` if there is no such row. Used when accepting
+    /// a shared note to avoid duplicating one that already exists locally.
+    fn get(&self, id: &str) -> Result<Option<Sticky>, RepoError>;
     fn update(&self, id: &str, patch: &StickyPatch, stamp_updated_at: bool) -> Result<(), RepoError>;
     fn delete(&self, id: &str) -> Result<(), RepoError>;
 
@@ -193,6 +197,20 @@ impl StickyRepo for SqliteRepo {
         Ok(out)
     }
 
+    fn get(&self, id: &str) -> Result<Option<Sticky>, RepoError> {
+        let conn = self.lock();
+        let row = conn.query_row(
+            &format!("SELECT {COLUMNS} FROM stickies WHERE id = ?"),
+            [id],
+            row_to_sticky,
+        );
+        match row {
+            Ok(s) => Ok(Some(s)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     fn create(&self, s: &Sticky) -> Result<(), RepoError> {
         let conn = self.lock();
         conn.execute(
@@ -295,6 +313,14 @@ mod tests {
             .query_row("PRAGMA cipher_version", [], |r| r.get(0))
             .unwrap_or(None);
         assert!(ver.is_some(), "expected SQLCipher, got vanilla SQLite");
+    }
+
+    #[test]
+    fn get_returns_a_sticky_by_id_or_none() {
+        let repo = keyed_repo();
+        repo.create(&sticky("a")).unwrap();
+        assert_eq!(repo.get("a").unwrap().unwrap().id, "a");
+        assert!(repo.get("missing").unwrap().is_none());
     }
 
     #[test]

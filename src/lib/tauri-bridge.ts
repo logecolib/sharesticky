@@ -71,6 +71,40 @@ export async function saveStickyDoc(
   return invoke("save_sticky_doc", { id, bytes: Array.from(bytes), content });
 }
 
+// --- Phase 3b: Sharing (live P2P sync) ---
+
+/** Our dialable endpoint id, to hand to a peer so they can connect back. */
+export async function sharingEndpointId(): Promise<string> {
+  return invoke<string>("sharing_endpoint_id");
+}
+
+/** Start connecting to a peer and remember it as a sync target. */
+export async function sharingDial(peerId: string): Promise<void> {
+  return invoke("sharing_dial", { peerId });
+}
+
+/** Fan a note's Yjs sync frame out to every connected peer. */
+export async function sendSyncFrame(noteId: string, frame: Uint8Array): Promise<void> {
+  return invoke("send_sync_frame", { noteId, frame: Array.from(frame) });
+}
+
+/** Accept a shared note by id: materialise it locally (idempotent) and return it. */
+export async function acceptSharedSticky(id: string): Promise<Sticky> {
+  return invoke<Sticky>("accept_shared_sticky", { id });
+}
+
+/** Subscribe to inbound sync frames from peers, routed by note id. */
+export function onSyncFrame(
+  callback: (frame: { noteId: string; frame: Uint8Array }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ note_id: string; frame: number[] }>("sync-frame", (event) => {
+    callback({
+      noteId: event.payload.note_id,
+      frame: new Uint8Array(event.payload.frame),
+    });
+  });
+}
+
 export async function openStickyWindow(sticky: Sticky): Promise<void> {
   await invoke("open_sticky_window", {
     options: {

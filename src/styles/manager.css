@@ -206,3 +206,37 @@
   font-size: 11px;
   line-height: 1;
 }
+
+/* Sharing: paste a share code to receive a note. */
+.share-accept-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.share-accept-bar .share-accept-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  padding: 4px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+}
+
+.share-accept-bar .accept-share-btn {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #4a90d9;
+  color: #fff;
+  cursor: pointer;
+}
+
+.share-accept-bar .accept-share-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

@@ -29,6 +29,13 @@ export default defineConfig({
           branches: 100,
           statements: 100,
         },
+        // The Yjs sync protocol driver - pure, transport-agnostic, fully covered.
+        "src/lib/sync-protocol.ts": {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100,
+        },
         // The store holds real behaviour - optimistic writes, desktop tagging,
         // cross-window announcements - so it is held near the top.
         "src/store/stickies.ts": {

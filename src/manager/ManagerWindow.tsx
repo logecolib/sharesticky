@@ -10,6 +10,7 @@ import {
   sharingDial,
   acceptSharedSticky,
   openStickyWindow,
+  updateSticky,
 } from "../lib/tauri-bridge";
 import type { Sticky, DesktopInfo } from "../lib/tauri-bridge";
 import {
@@ -202,6 +203,18 @@ function ManagerWindow() {
     try {
       await sharingDial(endpointId);
       const sticky = await acceptSharedSticky(noteId);
+      // Tag it with the current desktop, like a locally created note, so it
+      // shows under the "This desktop" filter instead of being hidden as an
+      // unassigned ("") note. Desktop assignment is local and does not sync.
+      try {
+        const desktopId = await getCurrentDesktopId();
+        if (desktopId) {
+          await updateSticky(noteId, { desktop_id: desktopId });
+          sticky.desktop_id = desktopId;
+        }
+      } catch {
+        // Desktop detection unavailable; the manager then shows all notes anyway.
+      }
       await openStickyWindow(sticky);
       await loadStickies();
       setShareInput("");

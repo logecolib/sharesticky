@@ -212,10 +212,18 @@ pub fn run() {
 /// Where the P2P transport sidecar binary lives.
 ///
 /// `SHARESTICKY_SIDECAR` overrides it (used in packaged builds and tests);
+/// then a sidecar sitting next to the app exe (shared Cargo target dir);
 /// otherwise fall back to the dev build next to the app crate.
 fn sidecar_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("SHARESTICKY_SIDECAR") {
         return std::path::PathBuf::from(p);
+    }
+    if let Some(sibling) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("sharesticky-net.exe")))
+        .filter(|p| p.exists())
+    {
+        return sibling;
     }
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../net-sidecar/target/debug/sharesticky-net.exe")
